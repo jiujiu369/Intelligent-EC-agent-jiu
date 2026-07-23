@@ -1,0 +1,50 @@
+# Agent可用工具清单（Schema说明文档）
+## 工具总览
+本商家客服Agent一共提供7个可调用工具：
+1. rag_search：客服知识库检索
+2. query_goods：查询商品信息
+3. update_goods：修改商品信息
+4. query_stock：查询商品库存
+5. query_order：查询订单数据
+6. export_sales_report：生成销售统计报表
+7. create_aftersale_ticket：创建售后工单
+
+## 各工具详细定义
+### 1. rag_search
+功能：检索客服知识库，查询售后政策、活动规则、平台说明等文本资料
+入参：
+- query[string，必填]：用户查询问题
+
+### 2. query_goods
+功能：查询商品基础信息，支持ID精确查询 / 名称模糊检索
+入参（二选一，均可为空）：
+- goods_id[string]：商品唯一编号
+- goods_name[string]：商品名称
+
+### 3. update_goods
+功能：修改商品信息（价格、上下架状态等）
+入参：
+- goods_id[string，必填]：目标商品ID
+- update_info[object，必填]：待更新字段键值对
+
+### 4. query_stock
+功能：查询商品库存
+入参：
+- goods_id[string，可选]：商品ID；不传返回全部库存
+
+### 5. query_order
+功能：查询订单信息
+入参（可选）：
+- order_id[string]：订单编号精确查询
+- goods_id[string]：查询该商品全部关联订单
+
+### 6. export_sales_report
+功能：按时间段统计订单，输出销售报表、总销售额、订单数量
+入参（可选）：
+- start_time[string]：起始日期 YYYY-MM-DD
+- end_time[string]：结束日期 YYYY-MM-DD
+
+### 7. create_aftersale_ticket
+功能：新建售后工单
+入参：
+- new_ticket[object，必填]：工单完整信息，包含ticket_id、order_id、problem、status

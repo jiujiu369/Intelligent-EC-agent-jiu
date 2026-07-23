@@ -1,0 +1,25 @@
+# Chroma向量数据库（运行自动生成，禁止提交）
+datas/chroma_db/
+
+# Python缓存文件
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# 模型权重、大文件（后续本地LLM防止上传）
+models/
+*.bin
+*.gguf
+
+# 日志
+logs/
+*.log
+
+# 环境变量密钥文件
+.env
+.env.local
+
+# VSCode 临时文件
+.vscode/
+.DS_Store
