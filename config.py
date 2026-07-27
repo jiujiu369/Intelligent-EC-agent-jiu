@@ -1,0 +1,94 @@
+import os
+from typing import Any, Dict
+
+
+API: Dict[str, Any] = {
+    "api_key": "",
+    "base_url": "https://apihub.agnes-ai.com/v1",
+    "model_name": "agnes-2.0-flash",
+    "timeout": 60,
+    "max_retry": 2,
+    "temperature": 0.1,
+}
+
+PATHS: Dict[str, Any] = {
+    "datas_dir": "datas",
+    "docs_dir": "datas/docs",
+    "chroma_persist_dir": "datas/chroma_db",
+    "agent_memory_dir": "agent_memory",
+    "log_dir": "logs",
+    "goods_json": "datas/货品基础数据.json",
+    "stock_json": "datas/库存数据.json",
+    "order_json": "datas/订单数据.json",
+    "aftersale_json": "datas/售后工单.json",
+    "consumer_users_json": "datas/consumer_users.json",
+    "merchant_users_json": "datas/merchant_users.json",
+}
+
+RAG: Dict[str, Any] = {
+    "embedding_model": "BAAI/bge-base-zh-v1.5",
+    "fallback_model": "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
+    "chunk_size": 384,
+    "chunk_overlap": 64,
+    "distance_threshold": 1.5,
+}
+
+SESSION: Dict[str, Any] = {
+    "default_session": "对话一",
+    "max_message_rounds": 20,
+    "summary_keep_rounds": 10,
+}
+
+AGENT: Dict[str, Any] = {
+    "max_loop": 5,
+    "llm_temperature": 0.1,
+}
+
+
+class Config:
+    def __init__(self):
+        self._sections = {
+            "API": API,
+            "PATHS": PATHS,
+            "RAG": RAG,
+            "SESSION": SESSION,
+            "AGENT": AGENT,
+        }
+
+    def get(self, section: str, key: str, default: Any = None) -> Any:
+        section_name = section.upper()
+        section_data = self._sections.get(section_name, {})
+        value = section_data.get(key, default)
+
+        env_value = self._get_env_override(section_name, key)
+        if env_value is None:
+            return value
+        return self._cast_env_value(env_value, value)
+
+    @staticmethod
+    def _get_env_override(section: str, key: str) -> Any:
+        env_names = (
+            f"AGENT_{key.upper()}",
+            f"AGENT_{section}_{key.upper()}",
+        )
+        for env_name in env_names:
+            if env_name in os.environ:
+                return os.environ[env_name]
+        return None
+
+    @staticmethod
+    def _cast_env_value(env_value: str, default: Any) -> Any:
+        if isinstance(default, bool):
+            return env_value.strip().lower() in {"1", "true", "yes", "on"}
+        if isinstance(default, int) and not isinstance(default, bool):
+            return int(env_value)
+        if isinstance(default, float):
+            return float(env_value)
+        return env_value
+
+
+config = Config()
+
+
+def get(section: str, key: str, default: Any = None) -> Any:
+    return config.get(section, key, default)

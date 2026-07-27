@@ -27,7 +27,7 @@ tool_schemas = [
         "type": "function",
         "function": {
             "name": "query_goods",
-            "description": "查询商品基础信息，可以根据商品ID精确查询，或商品名称模糊搜索",
+            "description": "查询商品信息，支持按商品ID精确查询或按商品名称模糊查询",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -47,17 +47,15 @@ tool_schemas = [
         "type": "function",
         "function": {
             "name": "update_goods",
-            "description": "修改商品信息，例如价格、上下架状态等",
+            "description": "修改商品信息。修改价格时 update_info 可以使用 售价 或 价格，系统会统一更新商品数据里的【售价】字段。其他字段请使用原始字段名：name、分类、规格、上架状态、图文摘要。",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "goods_id": {
-                        "type": "string",
-                        "description": "目标商品ID"
+                    "goods_id": {"type": "string", "description": "商品编号，对应商品数据里的【商品ID】"
                     },
                     "update_info": {
                         "type": "object",
-                        "description": "待更新字段键值对，例如 {\"price\": 99, \"status\": \"下架\"}"
+                        "description":"待更新的字段和值，例如 {'售价':65} 或 {'价格':65}。如果用户没有提供新值，不要调用本工具，应先询问要改成多少。"
                     }
                 },
                 "required": ["goods_id", "update_info"]
@@ -161,15 +159,16 @@ from tools.data_loader import (
 )
 
 from embedding.rag_pipeline import rag_search
+from utils.rate_limiter import cache_query_goods, cache_rag_search
 
 
-# 后续rag_search、export_sales_report代码写完再补充进来
+# 全部工具已实现，名称→函数完整映射
 func_mapping = {
-    "query_goods": query_goods,
+    "query_goods": cache_query_goods(query_goods),
     "update_goods": update_goods,
     "query_stock": query_stock,
     "query_order": query_order,
     "create_aftersale_ticket": create_aftersale_ticket,
 	"export_sales_report": export_sales_report,
-    "rag_search": rag_search
+    "rag_search": cache_rag_search(rag_search)
 }

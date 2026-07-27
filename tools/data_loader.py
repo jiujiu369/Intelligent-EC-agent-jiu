@@ -1,13 +1,20 @@
+import functools
 import json
 import os
 from typing import List, Dict, Optional
+import config
+from tools.error_handler import atomic_load_json, atomic_save_json, safe_tool_call, wrap_tool_result
+from utils.logger import get_logger
+
+logger = get_logger(__name__)
 
 # ====================== 路径配置（不要修改，适配你现有目录）======================
-BASE_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), "../datas"))
-GOODS_PATH = os.path.join(BASE_PATH, "货品基础数据.json")
-STOCK_PATH = os.path.join(BASE_PATH, "库存数据.json")
-ORDER_PATH = os.path.join(BASE_PATH, "订单数据.json")
-AFTERSALE_PATH = os.path.join(BASE_PATH, "售后工单.json")
+PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+BASE_PATH = os.path.join(PROJECT_ROOT, config.get("PATHS", "datas_dir"))
+GOODS_PATH = os.path.join(PROJECT_ROOT, config.get("PATHS", "goods_json"))
+STOCK_PATH = os.path.join(PROJECT_ROOT, config.get("PATHS", "stock_json"))
+ORDER_PATH = os.path.join(PROJECT_ROOT, config.get("PATHS", "order_json"))
+AFTERSALE_PATH = os.path.join(PROJECT_ROOT, config.get("PATHS", "aftersale_json"))
 
 # ====================== 内存缓存全局变量 ======================
 _goods_data: List[Dict] = []
@@ -18,16 +25,22 @@ _aftersale_data: List[Dict] = []
 
 def load_json(file_path: str) -> List[Dict]:
     """加载json数组文件"""
-    if not os.path.exists(file_path):
+    try:
+        data = atomic_load_json(file_path)
+        logger.info(f"JSON读取 path={file_path} count={len(data)}")
+        return data
+    except Exception as exc:
+        logger.error(f"JSON读取异常 path={file_path} error={exc}")
         return []
-    with open(file_path, "r", encoding="utf-8") as f:
-        return json.load(f)
 
 
 def save_json(file_path: str, data: List[Dict]):
     """写入json文件（持久化保存修改）"""
-    with open(file_path, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
+    try:
+        atomic_save_json(file_path, data)
+        logger.info(f"JSON写入 path={file_path} count={len(data)}")
+    except Exception as exc:
+        logger.error(f"JSON写入异常 path={file_path} error={exc}")
 
 
 # 程序启动自动加载全部数据
@@ -37,7 +50,7 @@ def init_data():
     _stock_data = load_json(STOCK_PATH)
     _order_data = load_json(ORDER_PATH)
     _aftersale_data = load_json(AFTERSALE_PATH)
-    print("✅ 业务模拟数据加载完成！")
+    logger.info("业务模拟数据加载完成")
 
 
 # ===================== 对外提供接口（Agent直接调用）=====================
@@ -50,35 +63,65 @@ def query_goods(goods_id: Optional[str] = None, goods_name: Optional[str] = None
     """
     result = []
     for item in _goods_data:
-        if goods_id and item.get("goods_id") == goods_id:
-            result.append(item)
-        elif goods_name and goods_name in item.get("goods_name", ""):
-            result.append(item)
-        elif not goods_id and not goods_name:
+        match = False
+        # 匹配商品ID，忽略大小写
+        if goods_id:
+            item_id = item.get("商品ID", "").lower()
+            if item_id == goods_id.lower():
+                match = True
+        # 模糊匹配商品名称
+        if goods_name:
+            item_name = item.get("名称", "")
+            if goods_name in item_name:
+                match = True
+        # 无参数返回全部商品
+        if (not goods_id and not goods_name) or match:
             result.append(item)
     return result
 
 
-def update_goods(goods_id: str, update_info: Dict) -> Dict:
+def update_goods(goods_id: str, update_info: Optional[Dict] = None) -> Dict:
     """
     修改商品信息
     :param goods_id: 需要修改的商品ID
-    :param update_info: 待更新字段字典 {"price":99, "status":"下架"}
+    :param update_info: 待更新字段字典
     :return: 修改后的商品 / 失败提示
     """
+    if not goods_id:
+        return {"status": "fail", "msg": "缺少商品ID"}
+    if not isinstance(update_info, dict) or not update_info:
+        return {"status": "fail", "msg": "缺少要修改的字段和值，例如：修改商品SP123售价为99"}
+
+    # 别名映射：把大模型输出的常见key翻译成JSON真实字段名
+    alias_map = {
+        "price": "售价",
+        "价格": "售价",
+        "商品价格": "售价",
+        "商品售价": "售价",
+        "sale_price": "售价",
+        "selling_price": "售价",
+    }
+    real_update = {}
+    for key, val in update_info.items():
+        real_key = alias_map.get(str(key).strip(), key)
+        real_update[real_key] = val
+
     for item in _goods_data:
-        if item["goods_id"] == goods_id:
-            item.update(update_info)
+        # 重点：把 goods_id → 商品ID，兼容大小写
+        if item["商品ID"].upper() == str(goods_id).upper():
+            item.update(real_update)
             save_json(GOODS_PATH, _goods_data)
             return {"status": "success", "data": item}
-    return {"status": "fail", "msg": "未找到对应商品"}
+    return {"status": "fail", "msg": f"未找到商品ID：{goods_id}"}
+
 
 
 def query_stock(goods_id: Optional[str] = None) -> List[Dict]:
     """查询库存，支持商品id筛选"""
     if not goods_id:
         return _stock_data
-    return [s for s in _stock_data if s.get("goods_id") == goods_id]
+    # 数据字段为【商品ID】，兼容大小写
+    return [s for s in _stock_data if str(s.get("商品ID", "")).upper() == str(goods_id).upper()]
 
 
 def query_order(order_id: Optional[str] = None, goods_id: Optional[str] = None) -> List[Dict]:
@@ -89,9 +132,9 @@ def query_order(order_id: Optional[str] = None, goods_id: Optional[str] = None) 
     """
     res = []
     for order in _order_data:
-        if order_id and order.get("order_id") == order_id:
+        if order_id and order.get("订单号") == order_id:
             res.append(order)
-        elif goods_id and order.get("goods_id") == goods_id:
+        elif goods_id and str(order.get("商品ID", "")).upper() == str(goods_id).upper():
             res.append(order)
         elif not order_id and not goods_id:
             res.append(order)
@@ -101,11 +144,36 @@ def query_order(order_id: Optional[str] = None, goods_id: Optional[str] = None) 
 def create_aftersale_ticket(new_ticket: Dict) -> Dict:
     """
     创建售后工单
-    :param new_ticket: 工单完整字典，必须包含ticket_id, order_id, problem, status等字段
+    :param new_ticket: 工单完整字典，支持中英文字段名
+    工单字段：工单ID、关联订单号、问题类型、处理状态、处理记录、创建时间
     """
-    _aftersale_data.append(new_ticket)
+    import datetime
+    # 别名映射：把大模型/菜单常用key统一翻译成JSON真实字段名
+    alias_map = {
+        "ticket_id": "工单ID",
+        "order_id": "关联订单号",
+        "problem": "问题类型",
+        "status": "处理状态",
+        "工单ID": "工单ID",
+        "关联订单号": "关联订单号",
+        "问题类型": "问题类型",
+        "处理状态": "处理状态",
+    }
+    normalized = {}
+    for k, v in new_ticket.items():
+        real_key = alias_map.get(str(k).strip(), k)
+        normalized[real_key] = v
+    # 补全默认字段，保证与历史工单结构一致
+    normalized.setdefault("工单ID", f"WG{datetime.datetime.now().strftime('%Y%m%d%H%M%S')}")
+    normalized.setdefault("关联订单号", "")
+    normalized.setdefault("问题类型", "未分类")
+    normalized.setdefault("处理状态", "待处理")
+    normalized.setdefault("处理记录", "暂未安排客服跟进")
+    normalized.setdefault("创建时间", datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+
+    _aftersale_data.append(normalized)
     save_json(AFTERSALE_PATH, _aftersale_data)
-    return {"status": "success", "ticket": new_ticket}
+    return {"status": "success", "ticket": normalized}
 
 
 def get_all_orders() -> List[Dict]:
@@ -122,10 +190,11 @@ def export_sales_report(start_time: str = None, end_time: str = None) -> Dict:
     import datetime
     filter_orders = []
     for order in _order_data:
-        order_time_str = order.get("order_time", "")
+        order_time_str = order.get("下单时间", "")
         try:
-            order_dt = datetime.datetime.strptime(order_time_str, "%Y-%m-%d")
-        except:
+            # 订单时间格式为 YYYY-MM-DD HH:MM:SS
+            order_dt = datetime.datetime.strptime(order_time_str, "%Y-%m-%d %H:%M:%S")
+        except Exception:
             filter_orders.append(order)
             continue
 
@@ -136,12 +205,14 @@ def export_sales_report(start_time: str = None, end_time: str = None) -> Dict:
                 in_range = False
         if end_time:
             e_dt = datetime.datetime.strptime(end_time, "%Y-%m-%d")
+            # 结束日期按当天结束（23:59:59）计算，避免漏掉当天订单
+            e_dt = e_dt.replace(hour=23, minute=59, second=59)
             if order_dt > e_dt:
                 in_range = False
         if in_range:
             filter_orders.append(order)
 
-    total_amount = sum(item.get("pay_amount", 0) for item in filter_orders)
+    total_amount = sum(item.get("实付金额", 0) for item in filter_orders)
     return {
         "start_time": start_time,
         "end_time": end_time,
@@ -150,6 +221,24 @@ def export_sales_report(start_time: str = None, end_time: str = None) -> Dict:
         "order_list": filter_orders
     }
 
+
+def _guard_tool_result(func):
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        result = wrap_tool_result(func.__name__, func(*args, **kwargs))
+        if isinstance(result, dict) and result.get("msg") == "未找到匹配信息":
+            logger.warning(f"工具查无结果 name={func.__name__} args={args} kwargs={kwargs}")
+        return result
+
+    return safe_tool_call(wrapper)
+
+
+query_goods = _guard_tool_result(query_goods)
+update_goods = _guard_tool_result(update_goods)
+query_stock = _guard_tool_result(query_stock)
+query_order = _guard_tool_result(query_order)
+create_aftersale_ticket = _guard_tool_result(create_aftersale_ticket)
+export_sales_report = _guard_tool_result(export_sales_report)
 
 
 # 程序启动自动执行加载

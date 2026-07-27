@@ -1,50 +1,301 @@
-# Agent可用工具清单（Schema说明文档）
-## 工具总览
-本商家客服Agent一共提供7个可调用工具：
-1. rag_search：客服知识库检索
-2. query_goods：查询商品信息
-3. update_goods：修改商品信息
-4. query_stock：查询商品库存
-5. query_order：查询订单数据
-6. export_sales_report：生成销售统计报表
-7. create_aftersale_ticket：创建售后工单
+# 电商客服 Agent
 
-## 各工具详细定义
-### 1. rag_search
-功能：检索客服知识库，查询售后政策、活动规则、平台说明等文本资料
-入参：
-- query[string，必填]：用户查询问题
+Python CLI 版电商客服智能助手。项目以 `agent/main_agent.py` 为入口，通过 LLM Function Call 调度本地业务工具，支持登录认证、角色权限、商品/库存/订单/售后处理、知识库检索、异常兜底、日志、限流缓存和规则型幻觉检测。
 
-### 2. query_goods
-功能：查询商品基础信息，支持ID精确查询 / 名称模糊检索
-入参（二选一，均可为空）：
-- goods_id[string]：商品唯一编号
-- goods_name[string]：商品名称
+## 当前能力
 
-### 3. update_goods
-功能：修改商品信息（价格、上下架状态等）
-入参：
-- goods_id[string，必填]：目标商品ID
-- update_info[object，必填]：待更新字段键值对
+### 登录与账号
 
-### 4. query_stock
-功能：查询商品库存
-入参：
-- goods_id[string，可选]：商品ID；不传返回全部库存
+- 支持消费者和商家两类角色。
+- 账号文件自动初始化：
+  - `datas/consumer_users.json`
+  - `datas/merchant_users.json`
+- 密码使用 PBKDF2-SHA256 加盐哈希保存，不持久化明文密码。
+- 预置测试账号：
 
-### 5. query_order
-功能：查询订单信息
-入参（可选）：
-- order_id[string]：订单编号精确查询
-- goods_id[string]：查询该商品全部关联订单
+| 角色 | 用户名 | 密码 |
+| --- | --- | --- |
+| 消费者 | `user1` | `123456` |
+| 商家 | `admin` | `admin123` |
 
-### 6. export_sales_report
-功能：按时间段统计订单，输出销售报表、总销售额、订单数量
-入参（可选）：
-- start_time[string]：起始日期 YYYY-MM-DD
-- end_time[string]：结束日期 YYYY-MM-DD
+### RBAC 权限控制
 
-### 7. create_aftersale_ticket
-功能：新建售后工单
-入参：
-- new_ticket[object，必填]：工单完整信息，包含ticket_id、order_id、problem、status
+权限控制在两层生效：
+
+- 第一层：`tools.rbac.get_filtered_schemas()` 按角色过滤传给 LLM 的 Function Schema。
+- 第二层：`tools.rbac.check_permission()` 在工具执行前再次校验权限。
+
+| 角色 | 可用工具数 | 可用工具 |
+| --- | ---: | --- |
+| consumer | 5 | `rag_search`、`query_goods`、`query_stock`、`query_order`、`create_aftersale_ticket` |
+| merchant | 7 | consumer 全部工具 + `update_goods`、`export_sales_report` |
+
+消费者查询商品时会通过 `mask_tool_result()` 隐藏 `上架状态` 字段；商家可查看完整商品字段。
+
+### 业务工具
+
+业务工具主要位于 `tools/data_loader.py`，通过 `tools/schema.py` 暴露给 Agent。
+
+| 工具 | 功能 | 当前状态 |
+| --- | --- | --- |
+| `query_goods` | 按商品 ID 精确查询，或按商品名称模糊查询 | 可用 |
+| `query_stock` | 查询全部库存，或按商品 ID 查询库存 | 可用 |
+| `query_order` | 查询全部订单，或按订单号/商品 ID 查询 | 可用 |
+| `create_aftersale_ticket` | 创建售后工单，缺失字段会自动补默认值 | 可用 |
+| `update_goods` | 修改商品信息，支持售价字段别名归一 | 商家可用 |
+| `export_sales_report` | 按日期范围统计订单数和销售额 | 商家可用 |
+| `get_all_orders` | 返回全部订单，用于销售报表统计 | 内部可用 |
+
+`query_goods`、`query_stock`、`query_order` 返回空列表时，会被包装为友好提示：`未找到匹配信息`。
+
+### RAG 知识库
+
+RAG 实现在 `embedding/rag_pipeline.py`。
+
+- 向量库：ChromaDB 持久化目录 `datas/chroma_db`
+- 文档目录：`datas/docs`
+- 商品数据：`datas/货品基础数据.json`
+- 主 embedding 模型：`BAAI/bge-base-zh-v1.5`
+- fallback 模型：`sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2`
+- chunk 参数：`chunk_size=384`，`chunk_overlap=64`
+- 低相似度过滤阈值：`distance_threshold=1.5`
+
+已实现的 RAG 维护函数：
+
+- `build_vector_db_docs()`：政策/知识库文档入库，支持去重。
+- `build_vector_db_goods()`：商品信息入库，支持去重。
+- `rag_search(query, top_k=5, doc_type=None)`：知识库检索。
+- `update_single_goods_vector(goods_id)`：单商品向量更新。
+- `rebuild_all_vectors()`：全量重建 policy + goods 向量，异常时回滚。
+- `clear_all_goods_vector()`：清空商品向量。
+- `fallback_keyword_search(query, top_k)`：RAG 不可用或低相似度时的关键词检索降级。
+
+当前环境如果 embedding 模型无法加载或 ChromaDB 连接失败，`rag_search()` 不会导致程序退出，会降级为关键词检索或兜底话术。
+
+### Agent 主流程
+
+入口：`agent/main_agent.py`
+
+核心流程：
+
+1. 用户登录并选择角色。
+2. 输入校验：空输入、乱码、闲聊、超长文本会被处理。
+3. 加载会话记忆。
+4. 使用 `tools.prompt_manager.build_system_prompt()` 动态构建系统提示词。
+5. 按角色过滤 Function Schema。
+6. 调用 LLM。
+7. 校验工具参数和权限。
+8. 执行业务工具并脱敏。
+9. 将工具结果回传 LLM。
+10. 返回答案前执行幻觉检测。
+11. 保存会话记忆。
+
+### 会话管理
+
+- 会话文件保存在 `agent_memory/*.json`。
+- 支持多个会话。
+- 支持查看、创建、切换、清空当前会话、清空全部会话。
+- 会话文件损坏时自动重建为空文件。
+- 消息超过配置轮数后自动摘要压缩。
+
+CLI 支持的命令：
+
+| 命令 | 功能 |
+| --- | --- |
+| `帮助` | 显示帮助 |
+| `菜单` | 显示命令菜单 |
+| `已有对话` / `历史对话` | 查看会话列表 |
+| `新建对话 <名称>` | 创建并切换到新会话 |
+| `切换到 <名称>` | 切换会话 |
+| `重新登录` | 切换账号/角色，并清空当前上下文 |
+| `清空当前记忆` | 清空当前会话记忆 |
+| `清空所有对话记忆` | 清空全部会话记忆 |
+| `退出` | 退出程序 |
+
+### 异常处理
+
+异常处理集中在 `tools/error_handler.py` 和相关调用方。
+
+- 用户输入过滤：
+  - 空白输入直接提示重新输入。
+  - 超过 500 字符自动截断并提示。
+  - 连续相同字符占比过高或不可打印字符占比过高时拒绝处理。
+  - “你好/在吗/谢谢/再见”等短闲聊会引导到业务问题。
+- 工具参数校验：执行前检查 required 参数。
+- 工具异常兜底：业务工具异常不会中断主程序。
+- JSON 文件锁：使用 `threading.Lock` 防止并发读写冲突。
+- 会话文件恢复：非法 JSON 会自动重建为空列表。
+
+### LLM API 客户端
+
+实现位置：`utils/api_monitor.py`
+
+- 请求前接入 `@rate_limit`。
+- HTTP 状态码分类处理：
+  - `401`：API key 失效提示。
+  - `402`：余额不足提示。
+  - `429`：按 `Retry-After` 等待后重试。
+  - `5xx`：指数退避重试。
+- 网络超时单独捕获。
+- 超过重试上限返回系统繁忙兜底。
+- DEBUG 日志记录 request/response 和 token 粗略估算。
+
+### 限流、缓存与重复提问去重
+
+实现位置：`utils/rate_limiter.py`
+
+- API 限流：时间窗口令牌桶，每 60 秒最多 30 次 API 调用。
+- `query_goods` TTL 缓存：5 分钟。
+- `rag_search` TTL 缓存：10 分钟。
+- 同一会话 5 秒内相同 query 直接返回缓存答案，不再次调用 LLM。
+
+### 幻觉检测
+
+实现位置：`tools/hallucination_checker.py`
+
+规则型检测，不额外调用 LLM：
+
+- 从回答中提取商品名、订单号、金额。
+- 与工具返回数据交叉比对。
+- 检测过度承诺词：`绝对`、`肯定`、`保证`、`100%`。
+- 输出 0-1 风险分，`score > 0.3` 视为有风险。
+- 按会话统计检测总数、风险数和风险占比。
+
+### 日志系统
+
+实现位置：`utils/logger.py`
+
+- 日志格式：`[时间] [级别] [模块] [会话名] 内容`
+- 控制台输出 INFO 及以上。
+- 文件输出 DEBUG 及以上。
+- 日志文件按天保存：`logs/YYYY-MM-DD.log`
+- 自动清理 30 天前日志。
+
+## 配置
+
+统一配置在 `config.py`。
+
+| 分组 | 内容 |
+| --- | --- |
+| `API` | `api_key`、`base_url`、`model_name`、`timeout`、`max_retry`、`temperature` |
+| `PATHS` | 数据目录、文档目录、ChromaDB 目录、记忆目录、日志目录、各 JSON 文件路径 |
+| `RAG` | embedding 模型、fallback 模型、chunk 参数、相似度阈值 |
+| `SESSION` | 默认会话名、最大消息轮数、摘要保留轮数 |
+| `AGENT` | 最大 LLM 工具循环次数、LLM temperature |
+
+支持环境变量覆盖，例如：
+
+```powershell
+$env:AGENT_API_KEY="你的 API Key"
+$env:AGENT_BASE_URL="https://apihub.agnes-ai.com/v1"
+$env:AGENT_MODEL_NAME="agnes-2.0-flash"
+```
+
+代码中通过以下方式读取配置：
+
+```python
+import config
+
+api_key = config.get("API", "api_key")
+```
+
+## 快速启动
+
+```powershell
+cd F:\code\project1
+python agent\main_agent.py
+```
+
+启动后按提示选择角色并登录。首次运行会自动初始化账号文件。
+
+## 常用维护命令
+
+构建政策文档和商品向量：
+
+```powershell
+python embedding\rag_pipeline.py
+```
+
+单独运行测试：
+
+```powershell
+python test_auth.py
+python test_rbac.py
+python test_business_tools.py
+python test_edge_cases.py
+```
+
+编译检查：
+
+```powershell
+python -m py_compile agent\main_agent.py tools\data_loader.py tools\rbac.py embedding\rag_pipeline.py
+```
+
+## 测试脚本
+
+当前测试脚本均可独立运行，使用简单 PASS/FAIL 统计输出。
+
+| 文件 | 覆盖范围 |
+| --- | --- |
+| `test_auth.py` | 登录认证、密码安全、注册、登录、RBAC 集成 |
+| `test_rbac.py` | 权限白名单、schema 过滤、越权拦截、商品脱敏、角色提示词 |
+| `test_business_tools.py` | 商品、库存、订单、售后、商品更新、销售报表工具回归 |
+| `test_edge_cases.py` | 会话损坏、并发 JSON 写入、超长输入、API 超时、角色切换清空上下文 |
+| `test_rag.py` | RAG 连接、商品检索、政策检索、低相似度、top_k |
+| `test_error_handler.py` | 输入校验、工具参数校验、RAG 兜底、会话摘要、文件锁 |
+| `test_api_monitor.py` | HTTP 状态码处理、超时、重试、降级 |
+| `test_logger.py` | 日志格式、按天文件、30 天清理 |
+| `test_logging_integration.py` | 登录、RBAC、data_loader 日志埋点 |
+| `test_prompt_manager.py` | 提示词模板、动态拼接、Agent 集成 |
+| `test_config.py` | 配置默认值和环境变量覆盖 |
+| `test_rate_limiter.py` | 令牌桶、TTL 缓存、重复提问去重 |
+| `test_hallucination_checker.py` | 幻觉检测规则和会话统计 |
+| `test_agent_rate_limiter_integration.py` | Agent 重复提问不重复调用 LLM |
+| `test_rag_pipeline_fallback.py` | ChromaDB 不可用时 RAG 降级 |
+| `test_rag_vector_maintenance.py` | 向量去重、单商品更新、全量重建回滚、关键词降级 |
+
+## 当前已知限制
+
+- `query_order()` 当前只支持按订单号和商品 ID 查询，不支持时间筛选参数。
+- `create_aftersale_ticket()` 当前会自动补齐缺失字段，不会拒绝字段不完整的工单。
+- `test_rag.py` 依赖本地 embedding 模型和 ChromaDB 可用；如果模型无法加载或向量库为空，相关检索测试会失败，但主程序会走降级路径。
+- `requirements.txt` 当前未列出 `jieba`；关键词降级检索会在缺少 `jieba` 时使用正则分词。
+- README 说明以当前 Python CLI 项目为准，未包含 Web API 或 Gradio 启动入口。
+
+## 目录结构
+
+```text
+project1/
+├─ agent/
+│  └─ main_agent.py
+├─ embedding/
+│  └─ rag_pipeline.py
+├─ tools/
+│  ├─ auth_login.py
+│  ├─ data_loader.py
+│  ├─ error_handler.py
+│  ├─ hallucination_checker.py
+│  ├─ prompt_manager.py
+│  ├─ rbac.py
+│  └─ schema.py
+├─ utils/
+│  ├─ api_monitor.py
+│  ├─ logger.py
+│  └─ rate_limiter.py
+├─ datas/
+│  ├─ docs/
+│  ├─ chroma_db/
+│  ├─ consumer_users.json
+│  ├─ merchant_users.json
+│  ├─ 货品基础数据.json
+│  ├─ 库存数据.json
+│  ├─ 订单数据.json
+│  └─ 售后工单.json
+├─ agent_memory/
+├─ logs/
+├─ models/
+├─ config.py
+├─ requirements.txt
+├─ README
+└─ test_*.py
+```

@@ -1,0 +1,17 @@
+{
+  "user1": {
+    "password_hash": "caaad24a49e292178e7424df3b17c5178a5b2701fdffa45ff734c2f4d5fd322f",
+    "salt": "8bd2147dd08acbaaf52693ef724dbd68d5c34a1a87d18aad202d1fcd3c5edca4",
+    "created_at": "2026-07-27 16:19:51"
+  },
+  "zkt": {
+    "password_hash": "e20e28c2620945bed53226f36245e23f81eba2a89d49b773c7965efced038ee4",
+    "salt": "1862baac0b74c9e98a621d8dfcbde84860eaeb6333b4f666ceb59dd481c0ba6d",
+    "created_at": "2026-07-27 16:49:02"
+  },
+  "1111": {
+    "password_hash": "f3e753b553f3e12da28f36c74f7324d2122186420971deef3e01d43928a5fb42",
+    "salt": "885da26c1a53876fca61b23b625a86f6d19e14041e2d0cf4a191a51e12da070c",
+    "created_at": "2026-07-27 17:35:15"
+  }
+}

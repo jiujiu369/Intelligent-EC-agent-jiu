@@ -1,0 +1,29 @@
+[
+  {
+    "role": "user",
+    "content": "帮我修改 SP001"
+  },
+  {
+    "role": "assistant",
+    "content": null,
+    "tool_calls": [
+      {
+        "id": "call_1",
+        "function": {
+          "name": "update_goods",
+          "arguments": "{\"goods_id\":\"SP001\"}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "call_1",
+    "name": "update_goods",
+    "content": "{\"status\": \"fail\", \"msg\": \"缺少必要参数：update_info，请补充后再试\"}"
+  },
+  {
+    "role": "assistant",
+    "content": "缺少必要参数：update_info，请补充后再试"
+  }
+]
