@@ -82,7 +82,7 @@ tool_schemas = [
         "type": "function",
         "function": {
             "name": "query_order",
-            "description": "查询订单信息，支持根据订单号或商品ID查询",
+            "description": "查询订单信息，支持根据订单号、商品ID或下单时间范围查询",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -93,6 +93,14 @@ tool_schemas = [
                     "goods_id": {
                         "type": "string",
                         "description": "商品ID，查询该商品相关订单，可选"
+                    },
+                    "start_time": {
+                        "type": "string",
+                        "description": "起始日期，格式 YYYY-MM-DD，可选"
+                    },
+                    "end_time": {
+                        "type": "string",
+                        "description": "结束日期，格式 YYYY-MM-DD，可选"
                     }
                 }
             }

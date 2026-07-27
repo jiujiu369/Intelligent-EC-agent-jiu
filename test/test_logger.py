@@ -9,6 +9,8 @@ if ROOT_PATH not in sys.path:
 import importlib
 import os
 import tempfile
+import io
+from contextlib import redirect_stdout
 from datetime import date, timedelta
 
 
@@ -59,10 +61,22 @@ with tempfile.TemporaryDirectory() as tmpdir:
         content = f.read()
     failures += _assert("[INFO] [test.no_session] [-] no session" in content, "未传 session_name 时使用 -")
 
+    stdout_buffer = io.StringIO()
+    with redirect_stdout(stdout_buffer):
+        logger_module._reset_for_tests()
+        hidden_logger = logger_module.get_logger("test.hidden_console")
+        logger_module.set_console_logging_enabled(False)
+        hidden_logger.info("hidden from cli", extra={"session_name": "对话一"})
+    failures += _assert("hidden from cli" not in stdout_buffer.getvalue(), "关闭控制台日志后 stdout 不显示日志")
+
+    with open(log_path, "r", encoding="utf-8") as f:
+        content = f.read()
+    failures += _assert("[INFO] [test.hidden_console] [对话一] hidden from cli" in content, "关闭控制台日志后文件日志仍写入")
+
     logger_module._reset_for_tests()
 
 os.environ.pop("AGENT_LOG_DIR", None)
 
 print("=" * 60)
-print(f"  通过: {6 - failures}  失败: {failures}  总计: 6")
+print(f"  通过: {8 - failures}  失败: {failures}  总计: 8")
 raise SystemExit(1 if failures else 0)

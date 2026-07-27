@@ -8,6 +8,7 @@ import os
 import re
 import json
 import math
+import importlib
 from collections import Counter
 from typing import List, Dict
 import chromadb
@@ -15,7 +16,7 @@ from chromadb.utils.embedding_functions import SentenceTransformerEmbeddingFunct
 from PyPDF2 import PdfReader
 from docx import Document
 import config
-from tools.error_handler import filter_rag_results, rag_fallback_result
+from tools.error_handler import rag_fallback_result
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -24,46 +25,63 @@ logger = get_logger(__name__)
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 BASE_DIR = os.path.join(PROJECT_ROOT, config.get("PATHS", "datas_dir"))
 CHROMA_PERSIST_PATH = os.path.join(PROJECT_ROOT, config.get("PATHS", "chroma_persist_dir"))
+FALLBACK_CHROMA_PERSIST_PATH = os.path.join(PROJECT_ROOT, config.get("PATHS", "chroma_persist_dir_384"))
 DOC_FOLDER_PATH = os.path.join(PROJECT_ROOT, config.get("PATHS", "docs_dir"))
 GOODS_JSON_PATH = os.path.join(PROJECT_ROOT, config.get("PATHS", "goods_json")) # 新增商品json路径
 COLLECTION_NAME = "customer_service_docs"
+FALLBACK_COLLECTION_NAME = "customer_service_docs_384"
+FALLBACK_MODEL_NAME = config.get("RAG", "fallback_model")
 
-def _load_embedding_function():
+
+def _load_embedding_function(model_name: str, label: str):
     try:
-        model_name = config.get("RAG", "embedding_model")
-        fn = SentenceTransformerEmbeddingFunction(model_name=model_name)
-        logger.info(f"加载 embedding 模型 model={model_name}")
+        resolved_model_name = _resolve_model_name(model_name)
+        fn = SentenceTransformerEmbeddingFunction(model_name=resolved_model_name)
+        logger.info(f"加载 {label} embedding 模型 model={resolved_model_name}")
         return fn
     except Exception as e:
-        logger.warning(f"加载 BGE 模型失败，将使用回退模型 error={e}")
-
-    try:
-        fallback_model = config.get("RAG", "fallback_model")
-        fn = SentenceTransformerEmbeddingFunction(model_name=fallback_model)
-        logger.info(f"加载 fallback embedding 模型 model={fallback_model}")
-        return fn
-    except Exception as e:
-        logger.error(f"加载 fallback embedding 模型失败，RAG 将降级 error={e}")
+        logger.warning(f"加载 {label} embedding 模型失败 error={e}")
         return None
 
 
-embedding_fn = _load_embedding_function()
+def _resolve_model_name(model_name: str) -> str:
+    if os.path.isabs(model_name):
+        return model_name
+    local_path = os.path.join(PROJECT_ROOT, model_name)
+    if os.path.exists(local_path):
+        return local_path
+    return model_name
 
-# 初始化Chroma持久化客户端
-if embedding_fn is None:
-    chroma_client = None
-    collection = None
-else:
+
+def _init_chroma_collection(model_name: str, persist_path: str, collection_name: str, label: str):
+    embedding_function = _load_embedding_function(model_name, label)
+    if embedding_function is None:
+        return None, None, None, False
     try:
-        chroma_client = chromadb.PersistentClient(path=CHROMA_PERSIST_PATH)
-        collection = chroma_client.get_or_create_collection(
-            name=COLLECTION_NAME,
-            embedding_function=embedding_fn
+        client = chromadb.PersistentClient(path=persist_path)
+        target_collection = client.get_or_create_collection(
+            name=collection_name,
+            embedding_function=embedding_function
         )
+        return embedding_function, client, target_collection, False
     except Exception as e:
-        logger.error(f"ChromaDB连接异常 path={CHROMA_PERSIST_PATH} error={e}")
-        chroma_client = None
-        collection = None
+        logger.error(f"{label} ChromaDB连接异常 path={persist_path} error={e}")
+        return embedding_function, None, None, True
+
+
+embedding_fn, chroma_client, collection, chroma_connection_failed = _init_chroma_collection(
+    config.get("RAG", "embedding_model"),
+    CHROMA_PERSIST_PATH,
+    COLLECTION_NAME,
+    "primary-768",
+)
+
+fallback_embedding_fn, fallback_chroma_client, fallback_collection, fallback_chroma_connection_failed = _init_chroma_collection(
+    FALLBACK_MODEL_NAME,
+    FALLBACK_CHROMA_PERSIST_PATH,
+    FALLBACK_COLLECTION_NAME,
+    "fallback-384",
+)
 
 # ===================== 文件读取函数 =====================
 def clean_text(raw_text: str) -> str:
@@ -184,27 +202,29 @@ def split_text(
     return chunks
 
 
-def _collection_id_exists(chunk_id: str) -> bool:
-    if collection is None:
+def _collection_id_exists(chunk_id: str, target_collection=None) -> bool:
+    target_collection = target_collection or collection
+    if target_collection is None:
         return False
-    data = collection.get(ids=[chunk_id])
+    data = target_collection.get(ids=[chunk_id])
     return bool(data.get("ids"))
 
 
-def _add_chunks_if_missing(documents: List[str], metadatas: List[Dict], ids: List[str]) -> tuple:
+def _add_chunks_if_missing(documents: List[str], metadatas: List[Dict], ids: List[str], target_collection=None) -> tuple:
+    target_collection = target_collection or collection
     added_docs = []
     added_metas = []
     added_ids = []
     skipped = 0
     for doc, meta, chunk_id in zip(documents, metadatas, ids):
-        if _collection_id_exists(chunk_id):
+        if _collection_id_exists(chunk_id, target_collection):
             skipped += 1
             continue
         added_docs.append(doc)
         added_metas.append(meta)
         added_ids.append(chunk_id)
     if added_ids:
-        collection.add(
+        target_collection.add(
             documents=added_docs,
             metadatas=added_metas,
             ids=added_ids
@@ -255,13 +275,13 @@ def _restore_collection_snapshot(snapshot: Dict) -> None:
         collection.add(documents=documents, metadatas=metadatas, ids=ids)
 
 # =====================【原有】政策文档入库 =====================
-def build_vector_db_docs():
-    if collection is None:
-        logger.error("ChromaDB不可用，跳过政策文档入库")
+def _build_vector_db_docs_for(target_collection, label: str):
+    if target_collection is None:
+        logger.error(f"{label} ChromaDB不可用，跳过政策文档入库")
         return (0, 0)
     docs = load_all_docs(DOC_FOLDER_PATH)
     if len(docs) == 0:
-        logger.warning("未读取到可用政策文档，终止入库")
+        logger.warning(f"{label} 未读取到可用政策文档，终止入库")
         return (0, 0)
 
     all_chunks = []
@@ -279,20 +299,28 @@ def build_vector_db_docs():
             })
             all_ids.append(chunk_id)
 
-    added, skipped = _add_chunks_if_missing(all_chunks, all_metadatas, all_ids)
-    logger.info(f"政策文档入库完成 added={added} skipped={skipped}")
+    added, skipped = _add_chunks_if_missing(all_chunks, all_metadatas, all_ids, target_collection)
+    logger.info(f"{label} 政策文档入库完成 added={added} skipped={skipped}")
     return (added, skipped)
 
+
+def build_vector_db_docs():
+    return _build_vector_db_docs_for(collection, "primary-768")
+
+
+def build_vector_db_docs_384():
+    return _build_vector_db_docs_for(fallback_collection, "fallback-384")
+
 # =====================【新增】商品信息入库 =====================
-def build_vector_db_goods():
-    if collection is None:
-        logger.error("ChromaDB不可用，跳过商品信息入库")
+def _build_vector_db_goods_for(target_collection, label: str):
+    if target_collection is None:
+        logger.error(f"{label} ChromaDB不可用，跳过商品信息入库")
         return (0, 0)
     goods_list = load_goods_json()
     goods_list = [normalize_goods_key(item) for item in goods_list]
     
     if not goods_list:
-        logger.warning("无商品数据，跳过商品入库")
+        logger.warning(f"{label} 无商品数据，跳过商品入库")
         return (0, 0)
 
     all_chunks = []
@@ -312,9 +340,32 @@ def build_vector_db_goods():
             })
             all_ids.append(chunk_id)
 
-    added, skipped = _add_chunks_if_missing(all_chunks, all_metadatas, all_ids)
-    logger.info(f"商品信息入库完成 added={added} skipped={skipped}")
+    added, skipped = _add_chunks_if_missing(all_chunks, all_metadatas, all_ids, target_collection)
+    logger.info(f"{label} 商品信息入库完成 added={added} skipped={skipped}")
     return (added, skipped)
+
+
+def build_vector_db_goods():
+    return _build_vector_db_goods_for(collection, "primary-768")
+
+
+def build_vector_db_goods_384():
+    return _build_vector_db_goods_for(fallback_collection, "fallback-384")
+
+
+def _is_meaningless_rag_query(query: str) -> bool:
+    text = "" if query is None else str(query).strip()
+    if not text:
+        return True
+    if re.search(r"[\u4e00-\u9fff]", text):
+        return False
+    normalized = re.sub(r"\s+", "", text)
+    if re.fullmatch(r"SP\d+", normalized, flags=re.IGNORECASE):
+        return False
+    if len(normalized) <= 20 and re.fullmatch(r"[A-Za-z0-9]+", normalized):
+        return True
+    return False
+
 
 # =====================【改造】RAG检索入口，支持类型过滤 =====================
 def rag_search(query: str, top_k: int = 5, doc_type: str = None) -> List[Dict]:
@@ -323,47 +374,73 @@ def rag_search(query: str, top_k: int = 5, doc_type: str = None) -> List[Dict]:
     :param top_k: 返回数量
     :param doc_type: 过滤 "service_rule" / "goods_info"，不传则全部检索
     """
+    if _is_meaningless_rag_query(query):
+        logger.warning(f"RAG输入被过滤 query={query}")
+        return []
+
     if collection is None:
         logger.error(f"ChromaDB不可用，RAG降级 query={query} top_k={top_k}")
-        return fallback_keyword_search(query, top_k)
+        if fallback_collection is None:
+            return rag_fallback_result()
+        return fallback_vector_search(query, top_k, doc_type)
     try:
-        query_condition = {"query_texts": [query], "n_results": top_k}
-        if doc_type is not None:
-            query_condition["where"] = {"doc_type": doc_type}
-
-        result = collection.query(**query_condition)
-        output = []
-        distances = []
-        for text, meta, dist in zip(
-            result["documents"][0],
-            result["metadatas"][0],
-            result["distances"][0]
-        ):
-            rounded_dist = round(dist, 5)
-            item = {
-                "text": text,
-                "meta": meta,
-                "distance": rounded_dist
-            }
-            output.append(item)
-            distances.append(rounded_dist)
-        threshold = config.get("RAG", "distance_threshold")
-        filtered = filter_rag_results(output, threshold)
-        low_count = len([dist for dist in distances if dist > threshold])
-        avg_distance = round(sum(distances) / len(distances), 5) if distances else None
-        if low_count:
-            logger.warning(
-                f"RAG低相似度过滤 query={query} top_k={top_k} low_count={low_count} threshold={threshold}"
-            )
-        logger.info(
-            f"RAG检索 query={query} top_k={top_k} result_count={len(filtered)} avg_distance={avg_distance}"
-        )
-        if filtered and filtered[0].get("meta", {}).get("fallback"):
-            return fallback_keyword_search(query, top_k)
+        filtered = _search_collection(collection, query, top_k, doc_type, "primary-768")
+        if not filtered:
+            return fallback_vector_search(query, top_k, doc_type)
         return filtered
     except Exception as e:
         logger.error(f"RAG检索异常 query={query} top_k={top_k} error={e}")
-        return fallback_keyword_search(query, top_k)
+        return fallback_vector_search(query, top_k, doc_type)
+
+
+def fallback_vector_search(query: str, top_k: int = 5, doc_type: str = None) -> List[Dict]:
+    if fallback_collection is None:
+        return rag_fallback_result()
+    try:
+        filtered = _search_collection(fallback_collection, query, top_k, doc_type, "fallback-384")
+        if filtered:
+            return filtered
+    except Exception as e:
+        logger.error(f"384维备用RAG检索异常 query={query} top_k={top_k} error={e}")
+    return fallback_keyword_search(query, top_k)
+
+
+def _search_collection(target_collection, query: str, top_k: int, doc_type: str, label: str) -> List[Dict]:
+    query_condition = {"query_texts": [query], "n_results": top_k}
+    if doc_type is not None:
+        query_condition["where"] = {"doc_type": doc_type}
+
+    result = target_collection.query(**query_condition)
+    output = []
+    distances = []
+    for text, meta, dist in zip(
+        result["documents"][0],
+        result["metadatas"][0],
+        result["distances"][0]
+    ):
+        rounded_dist = round(dist, 5)
+        output.append({
+            "text": text,
+            "meta": meta,
+            "distance": rounded_dist
+        })
+        distances.append(rounded_dist)
+
+    threshold = config.get("RAG", "distance_threshold")
+    filtered = [
+        item for item in output
+        if item.get("distance") is not None and item["distance"] <= threshold
+    ]
+    low_count = len([dist for dist in distances if dist > threshold])
+    avg_distance = round(sum(distances) / len(distances), 5) if distances else None
+    if low_count:
+        logger.warning(
+            f"{label} RAG低相似度过滤 query={query} top_k={top_k} low_count={low_count} threshold={threshold}"
+        )
+    logger.info(
+        f"{label} RAG检索 query={query} top_k={top_k} result_count={len(filtered)} avg_distance={avg_distance}"
+    )
+    return filtered
 
 
 def update_single_goods_vector(goods_id: str) -> Dict:
@@ -509,11 +586,24 @@ def _load_keyword_candidates() -> List[Dict]:
 
 def _tokenize(text: str) -> List[str]:
     try:
-        import jieba
+        jieba = importlib.import_module("jieba")
         tokens = jieba.lcut(text)
     except Exception:
         tokens = re.findall(r"[\u4e00-\u9fffA-Za-z0-9]+", text)
-    return [token.strip().lower() for token in tokens if token and token.strip()]
+    normalized_tokens = []
+    for token in tokens:
+        token = token.strip().lower()
+        if not token:
+            continue
+        normalized_tokens.append(token)
+        if re.search(r"[\u4e00-\u9fff]", token) and len(token) > 1:
+            for size in (2, 3):
+                if len(token) >= size:
+                    normalized_tokens.extend(
+                        token[idx:idx + size]
+                        for idx in range(0, len(token) - size + 1)
+                    )
+    return normalized_tokens
 
 # =====================【新增工具】清空商品向量（商品大量更新时使用） =====================
 def clear_all_goods_vector():

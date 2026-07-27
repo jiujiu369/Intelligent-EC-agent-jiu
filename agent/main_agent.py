@@ -7,7 +7,7 @@ if ROOT_PATH not in sys.path:
     sys.path.append(ROOT_PATH)
     
 import json
-from typing import List, Dict
+from typing import List, Dict, Optional
 import config
 from utils.api_monitor import llm_client
 from utils.rate_limiter import get_repeated_query_answer, remember_query_answer
@@ -30,7 +30,7 @@ from tools.rbac import (
     ROLE_CONSUMER,
     ROLE_MERCHANT,
 )
-from utils.logger import get_logger
+from utils.logger import get_logger, set_console_logging_enabled
 
 logger = get_logger(__name__)
 
@@ -79,9 +79,34 @@ def _parse_command_arg(raw_input: str, prefix: str):
     return True, arg if arg else None
 
 
-def _next_auto_session() -> str:
+def _get_user_scope(username: Optional[str] = None, role: Optional[str] = None) -> str:
+    if not username:
+        return ""
+    safe_role = normalize_session_name(role or "user")
+    safe_username = normalize_session_name(username)
+    return f"{safe_role}_{safe_username}"
+
+
+def _get_memory_base_dir(username: Optional[str] = None, role: Optional[str] = None) -> str:
+    user_scope = _get_user_scope(username, role)
+    if not user_scope:
+        return MEMORY_DIR
+    return os.path.join(MEMORY_DIR, user_scope)
+
+
+def get_session_label(
+    session_name: str,
+    username: Optional[str] = None,
+    role: Optional[str] = None,
+) -> str:
+    user_scope = _get_user_scope(username, role)
+    safe_name = normalize_session_name(session_name)
+    return f"{user_scope}/{safe_name}" if user_scope else safe_name
+
+
+def _next_auto_session(username: Optional[str] = None, role: Optional[str] = None) -> str:
     """返回下一个自动编号的会话名：对话一、对话二、..."""
-    existing = set(list_sessions())
+    existing = set(list_sessions(username=username, role=role))
     i = 1
     while True:
         name = f"对话{_to_cn_num(i)}"
@@ -90,28 +115,42 @@ def _next_auto_session() -> str:
         i += 1
 
 
-def get_session_path(session_name: str) -> str:
+def get_session_path(
+    session_name: str,
+    username: Optional[str] = None,
+    role: Optional[str] = None,
+) -> str:
     safe_name = normalize_session_name(session_name)
-    return os.path.join(MEMORY_DIR, f"{safe_name}.json")
+    return os.path.join(_get_memory_base_dir(username, role), f"{safe_name}.json")
 
 
-def list_sessions() -> List[str]:
+def list_sessions(username: Optional[str] = None, role: Optional[str] = None) -> List[str]:
     sessions = []
-    if not os.path.exists(MEMORY_DIR):
+    base_dir = _get_memory_base_dir(username, role)
+    if not os.path.exists(base_dir):
         return sessions
-    for filename in os.listdir(MEMORY_DIR):
+    for filename in os.listdir(base_dir):
         if filename.endswith(".json"):
             sessions.append(os.path.splitext(filename)[0])
     return sorted(sessions)
 
 
-def load_memory(session_name: str = DEFAULT_SESSION) -> List[Dict]:
-    session_path = get_session_path(session_name)
+def load_memory(
+    session_name: str = DEFAULT_SESSION,
+    username: Optional[str] = None,
+    role: Optional[str] = None,
+) -> List[Dict]:
+    session_path = get_session_path(session_name, username=username, role=role)
     return recover_memory_file(session_path)
 
 
-def save_memory(messages: List[Dict], session_name: str = DEFAULT_SESSION):
-    session_path = get_session_path(session_name)
+def save_memory(
+    messages: List[Dict],
+    session_name: str = DEFAULT_SESSION,
+    username: Optional[str] = None,
+    role: Optional[str] = None,
+):
+    session_path = get_session_path(session_name, username=username, role=role)
     memory_messages = [m for m in messages if m.get("role") != "system"]
     summary_message, memory_messages = summarize_memory(
         memory_messages,
@@ -123,61 +162,109 @@ def save_memory(messages: List[Dict], session_name: str = DEFAULT_SESSION):
     atomic_save_json(session_path, memory_messages)
 
 
-def clear_memory(session_name: str = DEFAULT_SESSION) -> None:
-    session_path = get_session_path(session_name)
+def clear_memory(
+    session_name: str = DEFAULT_SESSION,
+    username: Optional[str] = None,
+    role: Optional[str] = None,
+) -> None:
+    session_path = get_session_path(session_name, username=username, role=role)
     if os.path.exists(session_path):
         try:
             os.remove(session_path)
-            logger.info("清空当前会话记忆", extra={"session_name": session_name})
+            logger.info("清空当前会话记忆", extra={"session_name": get_session_label(session_name, username, role)})
         except Exception:
             pass
 
 
-def clear_all_memory() -> None:
-    if not os.path.exists(MEMORY_DIR):
+def clear_all_memory(username: Optional[str] = None, role: Optional[str] = None) -> None:
+    base_dir = _get_memory_base_dir(username, role)
+    if not os.path.exists(base_dir):
         return
-    for filename in os.listdir(MEMORY_DIR):
+    for filename in os.listdir(base_dir):
         if filename.endswith(".json"):
             try:
-                os.remove(os.path.join(MEMORY_DIR, filename))
-                logger.info("清空会话文件 %s", filename, extra={"session_name": "-"})
+                os.remove(os.path.join(base_dir, filename))
+                logger.info("清空会话文件 %s", filename, extra={"session_name": _get_user_scope(username, role) or "-"})
             except Exception:
                 pass
 
 
+def get_recent_chat_records(
+    session_name: str = DEFAULT_SESSION,
+    username: Optional[str] = None,
+    role: Optional[str] = None,
+    limit: int = 5,
+) -> List[Dict]:
+    memory = load_memory(session_name, username=username, role=role)
+    chat_records = []
+    for item in memory:
+        if item.get("role") not in {"user", "assistant"}:
+            continue
+        content = item.get("content")
+        if content is None or not str(content).strip():
+            continue
+        chat_records.append(item)
+    return chat_records[-limit:]
+
+
+def format_recent_chat_records(records: List[Dict]) -> str:
+    if not records:
+        return "最近没有聊天记录。"
+    lines = ["最近五条聊天记录："]
+    role_labels = {"user": "用户", "assistant": "客服"}
+    for item in records:
+        role_label = role_labels.get(item.get("role"), item.get("role", "未知"))
+        content = str(item.get("content", "")).replace("\n", " ").strip()
+        lines.append(f"{role_label}：{content}")
+    return "\n".join(lines)
+
+
+def print_recent_chat_records(
+    session_name: str = DEFAULT_SESSION,
+    username: Optional[str] = None,
+    role: Optional[str] = None,
+    limit: int = 5,
+) -> None:
+    records = get_recent_chat_records(session_name, username=username, role=role, limit=limit)
+    print(format_recent_chat_records(records))
+
+
 def run_agent(user_query: str, session_name: str = DEFAULT_SESSION,
-              current_role: str = ROLE_CONSUMER, use_memory: bool = True) -> str:
+              current_role: str = ROLE_CONSUMER, use_memory: bool = True,
+              current_username: Optional[str] = None) -> str:
     try:
-        return _run_agent(user_query, session_name, current_role, use_memory)
+        return _run_agent(user_query, session_name, current_role, use_memory, current_username)
     except Exception as exc:
-        logger.error(f"Agent执行异常 error={exc}", extra={"session_name": session_name})
+        logger.error(f"Agent执行异常 error={exc}", extra={"session_name": get_session_label(session_name, current_username, current_role)})
         return LOST_MESSAGE
 
 
 def _run_agent(user_query: str, session_name: str = DEFAULT_SESSION,
-               current_role: str = ROLE_CONSUMER, use_memory: bool = True) -> str:
+               current_role: str = ROLE_CONSUMER, use_memory: bool = True,
+               current_username: Optional[str] = None) -> str:
+    scoped_session = get_session_label(session_name, current_username, current_role)
     input_result = validate_user_input(user_query)
     if not input_result.ok:
         logger.warning(
             f"输入被过滤 reason={input_result.message} raw={user_query}",
-            extra={"session_name": session_name},
+            extra={"session_name": scoped_session},
         )
         return input_result.message or LOST_MESSAGE
     user_query = input_result.text or ""
     input_notice = input_result.message
-    logger.info(f"用户请求 content={user_query}", extra={"session_name": session_name})
+    logger.info(f"用户请求 content={user_query}", extra={"session_name": scoped_session})
     if input_notice:
-        logger.warning(f"输入被截断 notice={input_notice}", extra={"session_name": session_name})
+        logger.warning(f"输入被截断 notice={input_notice}", extra={"session_name": scoped_session})
 
-    cached_answer = get_repeated_query_answer(session_name, user_query)
+    cached_answer = get_repeated_query_answer(scoped_session, user_query)
     if cached_answer is not None:
-        logger.info(f"重复提问命中缓存 query={user_query}", extra={"session_name": session_name})
+        logger.info(f"重复提问命中缓存 query={user_query}", extra={"session_name": scoped_session})
         return cached_answer
 
     previous_memory = []
     session_context = None
     if use_memory:
-        previous_memory = load_memory(session_name)
+        previous_memory = load_memory(session_name, username=current_username, role=current_role)
         if previous_memory:
             summary_parts = [m.get("content", "") for m in previous_memory if m.get("role") == "system"]
             if summary_parts:
@@ -198,23 +285,23 @@ def _run_agent(user_query: str, session_name: str = DEFAULT_SESSION,
 
     while loop_times < max_loop:
         loop_times += 1
-        logger.info(f"LLM调用开始 loop={loop_times}", extra={"session_name": session_name})
+        logger.info(f"LLM调用开始 loop={loop_times}", extra={"session_name": scoped_session})
         # 请求云端大模型，传入【角色过滤后】的工具清单
         llm_result = llm_client.chat_completion(
             messages=messages,
             tools=role_schemas,
             temperature=config.get("AGENT", "llm_temperature"),
-            session_name=session_name,
+            session_name=scoped_session,
         )
-        logger.info(f"LLM调用结束 loop={loop_times}", extra={"session_name": session_name})
+        logger.info(f"LLM调用结束 loop={loop_times}", extra={"session_name": scoped_session})
         choice = llm_result["choices"][0]
         message = choice["message"]
 
         # 情况1：不需要调用工具，直接输出回答
         if "tool_calls" not in message or message["tool_calls"] is None:
             messages.append(message)
-            save_memory(messages, session_name)
-            return _finalize_answer(message["content"], input_notice, tool_results, session_name, user_query)
+            save_memory(messages, session_name, username=current_username, role=current_role)
+            return _finalize_answer(message["content"], input_notice, tool_results, scoped_session, user_query)
 
         # 情况2：需要调用工具
         messages.append(message)
@@ -226,14 +313,14 @@ def _run_agent(user_query: str, session_name: str = DEFAULT_SESSION,
                 func_args = {}
             logger.info(
                 f"工具调用开始 name={func_name} args={func_args}",
-                extra={"session_name": session_name},
+                extra={"session_name": scoped_session},
             )
 
             validation = validate_tool_args(func_name, func_args, tool_schemas)
             if not validation["ok"]:
                 logger.warning(
                     f"工具参数缺失 name={func_name} msg={validation['msg']}",
-                    extra={"session_name": session_name},
+                    extra={"session_name": scoped_session},
                 )
                 tool_result = {"status": "fail", "msg": validation["msg"]}
                 tool_results.append(tool_result)
@@ -253,7 +340,7 @@ def _run_agent(user_query: str, session_name: str = DEFAULT_SESSION,
                 tool_content = json.dumps(tool_result, ensure_ascii=False)
                 logger.warning(
                     f"越权拦截 role={current_role} tool={func_name}",
-                    extra={"session_name": session_name},
+                    extra={"session_name": scoped_session},
                 )
                 messages.append({
                     "role": "tool",
@@ -276,13 +363,13 @@ def _run_agent(user_query: str, session_name: str = DEFAULT_SESSION,
                     tool_results.append(tool_return)
                     logger.info(
                         f"工具调用结束 name={func_name} result_summary={_summarize_tool_result(tool_return)}",
-                        extra={"session_name": session_name},
+                        extra={"session_name": scoped_session},
                     )
                     tool_content = json.dumps(tool_return, ensure_ascii=False)
                 except Exception as exc:
                     logger.error(
                         f"工具调用异常 name={func_name} error={exc}",
-                        extra={"session_name": session_name},
+                        extra={"session_name": scoped_session},
                     )
                     tool_result = {"status": "fail", "msg": f"工具执行失败：{exc}"}
                     tool_results.append(tool_result)
@@ -299,8 +386,8 @@ def _run_agent(user_query: str, session_name: str = DEFAULT_SESSION,
                 "content": tool_content
             })
 
-    save_memory(messages, session_name)
-    return _finalize_answer("已达到最大工具调用轮次，无法完成查询", input_notice, tool_results, session_name, user_query)
+    save_memory(messages, session_name, username=current_username, role=current_role)
+    return _finalize_answer("已达到最大工具调用轮次，无法完成查询", input_notice, tool_results, scoped_session, user_query)
 
 
 def _with_input_notice(answer: str, input_notice: str = None) -> str:
@@ -331,6 +418,8 @@ def _summarize_tool_result(result) -> str:
 
 # 本地调试入口
 if __name__ == "__main__":
+    set_console_logging_enabled(False)
+
     # === 登录认证（独立模块，启动即执行） ===
     from tools.auth_login import init_auth_files, auth_interactive
 
@@ -345,6 +434,7 @@ if __name__ == "__main__":
     role_label = "消费者" if current_role == ROLE_CONSUMER else "商家"
     print(f"当前角色：{role_label}  |  用户：{current_username}")
     print(f"当前对话会话：{current_session}")
+    print_recent_chat_records(current_session, username=current_username, role=current_role)
     print("输入帮助查看全部会话管理命令，输入菜单查看可执行指令\n")
 
     help_text = """
@@ -376,7 +466,7 @@ if __name__ == "__main__":
             continue
         # 查看会话列表
         if raw_input in {"已有对话", "历史对话"}:
-            sessions = list_sessions()
+            sessions = list_sessions(username=current_username, role=current_role)
             print("可用会话：", ", ".join(sessions) if sessions else "(暂无会话)")
             continue
         # 新建对话（支持无空格：新建对话咨询 / 新建对话：咨询 / 新建对话   咨询）
@@ -386,11 +476,11 @@ if __name__ == "__main__":
                 safe_name = normalize_session_name(name)
             else:
                 # 未指定名称 → 自动编号 对话N
-                safe_name = _next_auto_session()
+                safe_name = _next_auto_session(username=current_username, role=current_role)
             current_session = safe_name
-            clear_memory(current_session)
-            save_memory([], current_session)
-            logger.info("会话切换 type=create", extra={"session_name": current_session})
+            clear_memory(current_session, username=current_username, role=current_role)
+            save_memory([], current_session, username=current_username, role=current_role)
+            logger.info("会话切换 type=create", extra={"session_name": get_session_label(current_session, current_username, current_role)})
             print(f"已创建并切换到会话：{current_session}")
             continue
         # 切换会话（支持无空格写法）
@@ -399,13 +489,14 @@ if __name__ == "__main__":
             if name:
                 safe_name = normalize_session_name(name)
                 current_session = safe_name
-                session_list = list_sessions()
+                session_list = list_sessions(username=current_username, role=current_role)
                 if current_session not in session_list:
-                    logger.info("会话切换 type=new_empty", extra={"session_name": current_session})
+                    logger.info("会话切换 type=new_empty", extra={"session_name": get_session_label(current_session, current_username, current_role)})
                     print(f"会话 {current_session} 不存在，将启用全新空会话")
                 else:
-                    logger.info("会话切换 type=switch", extra={"session_name": current_session})
+                    logger.info("会话切换 type=switch", extra={"session_name": get_session_label(current_session, current_username, current_role)})
                     print(f"已切换到会话：{current_session}")
+                    print_recent_chat_records(current_session, username=current_username, role=current_role)
             else:
                 print("请输入会话名称！示例：切换到售后咨询")
             continue
@@ -416,19 +507,19 @@ if __name__ == "__main__":
                 print("登录已取消，保持当前账号")
                 continue
             current_role, current_username = result   # type: ignore[misc]
-            clear_memory(current_session)
-            save_memory([], current_session)
-            logger.info("重新登录后清空会话上下文", extra={"session_name": current_session})
+            clear_memory(current_session, username=current_username, role=current_role)
+            save_memory([], current_session, username=current_username, role=current_role)
+            logger.info("重新登录后清空会话上下文", extra={"session_name": get_session_label(current_session, current_username, current_role)})
             role_label = "消费者" if current_role == ROLE_CONSUMER else "商家"
             print(f"已切换身份，当前角色：{role_label}  |  用户：{current_username}，会话上下文已清空")
         # 清空当前会话记忆
         if raw_input == "清空当前记忆":
-            clear_memory(current_session)
+            clear_memory(current_session, username=current_username, role=current_role)
             print(f"已清空会话【{current_session}】的对话记忆")
             continue
         # 清空全部会话记忆
         if raw_input == "清空所有对话记忆":
-            clear_all_memory()
+            clear_all_memory(username=current_username, role=current_role)
             print("已清空全部会话记忆")
             continue
         # 显示可执行指令
@@ -437,5 +528,10 @@ if __name__ == "__main__":
             continue
 
         # 普通客服问题，交给Agent处理
-        answer = run_agent(raw_input, session_name=current_session, current_role=current_role)
+        answer = run_agent(
+            raw_input,
+            session_name=current_session,
+            current_role=current_role,
+            current_username=current_username,
+        )
         print(f"\n客服回答：{answer}")

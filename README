@@ -1,197 +1,254 @@
 # 电商客服 Agent
 
-Python CLI 版电商客服智能助手。项目以 `agent/main_agent.py` 为入口，通过 LLM Function Call 调度本地业务工具，支持登录认证、角色权限、商品/库存/订单/售后处理、知识库检索、异常兜底、日志、限流缓存和规则型幻觉检测。
+Python CLI 版电商客服智能助手。项目入口为 `agent/main_agent.py`，通过 LLM Function Call 调用本地业务工具，支持登录认证、角色权限、商品/库存/订单/售后处理、RAG 知识库检索、会话记忆、统一配置、日志、限流缓存、异常兜底和规则型幻觉检测。
 
-## 当前能力
+## 当前功能
 
-### 登录与账号
+### 1. 登录与角色
 
-- 支持消费者和商家两类角色。
-- 账号文件自动初始化：
-  - `datas/consumer_users.json`
-  - `datas/merchant_users.json`
-- 密码使用 PBKDF2-SHA256 加盐哈希保存，不持久化明文密码。
-- 预置测试账号：
+支持两类用户：
 
-| 角色 | 用户名 | 密码 |
+| 角色 | 说明 | 默认账号 |
 | --- | --- | --- |
-| 消费者 | `user1` | `123456` |
-| 商家 | `admin` | `admin123` |
+| consumer | 消费者，只能查询和创建售后 | `user1 / 123456` |
+| merchant | 商家，拥有商品管理和报表权限 | `admin / admin123` |
 
-### RBAC 权限控制
+账号文件：
 
-权限控制在两层生效：
+- `datas/consumer_users.json`
+- `datas/merchant_users.json`
 
-- 第一层：`tools.rbac.get_filtered_schemas()` 按角色过滤传给 LLM 的 Function Schema。
-- 第二层：`tools.rbac.check_permission()` 在工具执行前再次校验权限。
+密码使用 PBKDF2-SHA256 加盐哈希保存，不保存明文密码。
 
-| 角色 | 可用工具数 | 可用工具 |
-| --- | ---: | --- |
-| consumer | 5 | `rag_search`、`query_goods`、`query_stock`、`query_order`、`create_aftersale_ticket` |
-| merchant | 7 | consumer 全部工具 + `update_goods`、`export_sales_report` |
+### 2. RBAC 权限控制
 
-消费者查询商品时会通过 `mask_tool_result()` 隐藏 `上架状态` 字段；商家可查看完整商品字段。
+权限控制位于 `tools/rbac.py`。
 
-### 业务工具
+| 角色 | 可用工具 |
+| --- | --- |
+| consumer | `rag_search`、`query_goods`、`query_stock`、`query_order`、`create_aftersale_ticket` |
+| merchant | consumer 全部工具 + `update_goods`、`export_sales_report` |
 
-业务工具主要位于 `tools/data_loader.py`，通过 `tools/schema.py` 暴露给 Agent。
+权限生效方式：
 
-| 工具 | 功能 | 当前状态 |
-| --- | --- | --- |
-| `query_goods` | 按商品 ID 精确查询，或按商品名称模糊查询 | 可用 |
-| `query_stock` | 查询全部库存，或按商品 ID 查询库存 | 可用 |
-| `query_order` | 查询全部订单，或按订单号/商品 ID 查询 | 可用 |
-| `create_aftersale_ticket` | 创建售后工单，缺失字段会自动补默认值 | 可用 |
-| `update_goods` | 修改商品信息，支持售价字段别名归一 | 商家可用 |
-| `export_sales_report` | 按日期范围统计订单数和销售额 | 商家可用 |
-| `get_all_orders` | 返回全部订单，用于销售报表统计 | 内部可用 |
+- `get_filtered_schemas()` 按角色过滤传给 LLM 的 Function Schema。
+- `check_permission()` 在工具执行前二次校验。
+- `mask_tool_result()` 对消费者查询商品结果做脱敏，隐藏 `上架状态` 字段。
 
-`query_goods`、`query_stock`、`query_order` 返回空列表时，会被包装为友好提示：`未找到匹配信息`。
+### 3. 业务工具
 
-### RAG 知识库
+业务工具位于 `tools/data_loader.py`，Schema 位于 `tools/schema.py`。
+
+| 工具 | 功能 |
+| --- | --- |
+| `query_goods` | 按商品 ID 精确查询，或按商品名称模糊查询 |
+| `query_stock` | 查询全部库存，或按商品 ID 查询库存 |
+| `query_order` | 按订单号、商品 ID、下单时间范围查询订单 |
+| `create_aftersale_ticket` | 创建售后工单，缺少核心字段时拒绝创建 |
+| `update_goods` | 修改商品信息，支持售价/价格等字段别名 |
+| `export_sales_report` | 按时间范围统计订单数量和销售额 |
+| `get_all_orders` | 内部工具，供销售报表统计使用 |
+
+查无结果时返回友好提示：`未找到匹配信息`。
+
+### 4. RAG 知识库
 
 RAG 实现在 `embedding/rag_pipeline.py`。
 
-- 向量库：ChromaDB 持久化目录 `datas/chroma_db`
-- 文档目录：`datas/docs`
-- 商品数据：`datas/货品基础数据.json`
-- 主 embedding 模型：`BAAI/bge-base-zh-v1.5`
-- fallback 模型：`sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2`
-- chunk 参数：`chunk_size=384`，`chunk_overlap=64`
-- 低相似度过滤阈值：`distance_threshold=1.5`
+主向量库：
 
-已实现的 RAG 维护函数：
+- 模型：`F:\code\project1\models\bge-base-zh-v1.5`
+- 维度：768
+- ChromaDB 路径：`datas/chroma_db`
+- Collection：`customer_service_docs`
 
-- `build_vector_db_docs()`：政策/知识库文档入库，支持去重。
-- `build_vector_db_goods()`：商品信息入库，支持去重。
-- `rag_search(query, top_k=5, doc_type=None)`：知识库检索。
-- `update_single_goods_vector(goods_id)`：单商品向量更新。
-- `rebuild_all_vectors()`：全量重建 policy + goods 向量，异常时回滚。
-- `clear_all_goods_vector()`：清空商品向量。
-- `fallback_keyword_search(query, top_k)`：RAG 不可用或低相似度时的关键词检索降级。
+备用向量库：
 
-当前环境如果 embedding 模型无法加载或 ChromaDB 连接失败，`rag_search()` 不会导致程序退出，会降级为关键词检索或兜底话术。
+- 模型：`F:\code\project1\models\paraphrase-multilingual-MiniLM-L12-v2`
+- 维度：384
+- ChromaDB 路径：`datas/chroma_db_384`
+- Collection：`customer_service_docs_384`
 
-### Agent 主流程
+RAG 参数：
 
-入口：`agent/main_agent.py`
+- `chunk_size = 384`
+- `chunk_overlap = 64`
+- `distance_threshold = 1.5`
 
-核心流程：
+已实现函数：
 
-1. 用户登录并选择角色。
-2. 输入校验：空输入、乱码、闲聊、超长文本会被处理。
-3. 加载会话记忆。
-4. 使用 `tools.prompt_manager.build_system_prompt()` 动态构建系统提示词。
-5. 按角色过滤 Function Schema。
-6. 调用 LLM。
-7. 校验工具参数和权限。
-8. 执行业务工具并脱敏。
-9. 将工具结果回传 LLM。
-10. 返回答案前执行幻觉检测。
-11. 保存会话记忆。
+| 函数 | 说明 |
+| --- | --- |
+| `build_vector_db_docs()` | 构建主 768 维政策文档向量 |
+| `build_vector_db_goods()` | 构建主 768 维商品向量 |
+| `build_vector_db_docs_384()` | 构建备用 384 维政策文档向量 |
+| `build_vector_db_goods_384()` | 构建备用 384 维商品向量 |
+| `rag_search(query, top_k=5, doc_type=None)` | 知识库检索入口 |
+| `fallback_vector_search(query, top_k=5, doc_type=None)` | 384 维备用向量检索 |
+| `fallback_keyword_search(query, top_k=5)` | 关键词降级检索 |
+| `update_single_goods_vector(goods_id)` | 单商品向量更新 |
+| `rebuild_all_vectors()` | 全量重建 policy + goods 向量，异常时回滚 |
+| `clear_all_goods_vector()` | 清空商品向量 |
 
-### 会话管理
+检索规则：
 
-- 会话文件保存在 `agent_memory/*.json`。
-- 支持多个会话。
-- 支持查看、创建、切换、清空当前会话、清空全部会话。
-- 会话文件损坏时自动重建为空文件。
-- 消息超过配置轮数后自动摘要压缩。
+- 主 768 向量库优先。
+- 主库查询异常或结果为空时，自动尝试 384 维备用库。
+- 主库和 384 维备用库都连接失败时，直接返回降级话术：`暂未找到相关知识，建议联系人工客服`。
+- 向量库可用但检索结果为空或相似度过低时，会尝试关键词降级检索。
+- `distance > distance_threshold` 的结果会被过滤。
+- 短英文数字乱码，如 `xyz123xyz`，会在 RAG 入口被识别为无意义输入并返回空结果。
 
-CLI 支持的命令：
+### 5. 会话管理
+
+会话逻辑位于 `agent/main_agent.py`。
+
+- 默认会话名来自 `config.py`：`对话一`
+- 会话文件保存在 `agent_memory/`
+- 多用户会话按 `role + username` 隔离，聊天记录不会串联
+- 打开或切换已有会话时输出最近 5 条聊天记录
+- 会话文件损坏时自动重建空文件
+- 单次会话超过 20 轮后，自动摘要压缩前 10 轮并注入 system prompt
+
+CLI 命令：
 
 | 命令 | 功能 |
 | --- | --- |
-| `帮助` | 显示帮助 |
-| `菜单` | 显示命令菜单 |
-| `已有对话` / `历史对话` | 查看会话列表 |
+| `帮助` / `菜单` | 显示命令菜单 |
+| `已有对话` / `历史对话` | 查看当前用户的会话列表 |
 | `新建对话 <名称>` | 创建并切换到新会话 |
-| `切换到 <名称>` | 切换会话 |
+| `切换到 <名称>` | 切换已有会话，并输出最近 5 条记录 |
 | `重新登录` | 切换账号/角色，并清空当前上下文 |
-| `清空当前记忆` | 清空当前会话记忆 |
-| `清空所有对话记忆` | 清空全部会话记忆 |
+| `清空当前记忆` | 清空当前会话 |
+| `清空所有对话记忆` | 清空当前用户全部会话 |
 | `退出` | 退出程序 |
 
-### 异常处理
+### 6. 提示词管理
 
-异常处理集中在 `tools/error_handler.py` 和相关调用方。
+提示词集中在 `tools/prompt_manager.py`。
 
-- 用户输入过滤：
-  - 空白输入直接提示重新输入。
-  - 超过 500 字符自动截断并提示。
-  - 连续相同字符占比过高或不可打印字符占比过高时拒绝处理。
-  - “你好/在吗/谢谢/再见”等短闲聊会引导到业务问题。
-- 工具参数校验：执行前检查 required 参数。
-- 工具异常兜底：业务工具异常不会中断主程序。
-- JSON 文件锁：使用 `threading.Lock` 防止并发读写冲突。
-- 会话文件恢复：非法 JSON 会自动重建为空列表。
+- `BASE_SYSTEM`
+- `ROLE_CONSUMER`
+- `ROLE_MERCHANT`
+- `TOOL_CONSTRAINTS`
+- `ANTI_HALLUCINATION`
+- `ERROR_FALLBACK`
 
-### LLM API 客户端
+主要接口：
 
-实现位置：`utils/api_monitor.py`
+- `build_system_prompt(role, session_context=None)`
+- `get_role_description(role)`
+- `get_error_message(error_type)`
 
-- 请求前接入 `@rate_limit`。
-- HTTP 状态码分类处理：
-  - `401`：API key 失效提示。
-  - `402`：余额不足提示。
-  - `429`：按 `Retry-After` 等待后重试。
-  - `5xx`：指数退避重试。
-- 网络超时单独捕获。
-- 超过重试上限返回系统繁忙兜底。
-- DEBUG 日志记录 request/response 和 token 粗略估算。
+`main_agent.py` 不再硬编码系统提示词。
 
-### 限流、缓存与重复提问去重
+### 7. 异常处理
 
-实现位置：`utils/rate_limiter.py`
+异常处理集中在 `tools/error_handler.py`，并通过包装函数/调用前校验接入。
 
-- API 限流：时间窗口令牌桶，每 60 秒最多 30 次 API 调用。
-- `query_goods` TTL 缓存：5 分钟。
-- `rag_search` TTL 缓存：10 分钟。
-- 同一会话 5 秒内相同 query 直接返回缓存答案，不再次调用 LLM。
+覆盖场景：
 
-### 幻觉检测
+- 空白输入提示重新输入
+- 超长输入超过 500 字符时截断并提示
+- 连续相同字符占比过高、不可打印字符占比过高时拒绝处理
+- `你好`、`在吗`、`谢谢`、`再见` 等短闲聊引导到业务问题
+- 工具调用前检查 required 参数
+- 工具异常返回兜底话术，不退出程序
+- JSON 读写使用 `threading.Lock`
+- RAG 无结果返回：`暂未找到相关知识，建议联系人工客服`
 
-实现位置：`tools/hallucination_checker.py`
+### 8. LLM API 客户端
 
-规则型检测，不额外调用 LLM：
+API 客户端位于 `utils/api_monitor.py`。
 
-- 从回答中提取商品名、订单号、金额。
-- 与工具返回数据交叉比对。
-- 检测过度承诺词：`绝对`、`肯定`、`保证`、`100%`。
-- 输出 0-1 风险分，`score > 0.3` 视为有风险。
-- 按会话统计检测总数、风险数和风险占比。
+能力：
 
-### 日志系统
+- 从 `config.py` 和环境变量读取 API 配置
+- 每次调用前接入 `@rate_limit`
+- 401：返回密钥失效提示
+- 402：返回余额不足提示
+- 429：按 `Retry-After` 等待后重试
+- 5xx：指数退避重试，间隔 1s/2s/4s
+- 网络超时单独捕获
+- 超过重试上限返回：`系统繁忙，请稍后再试`
+- DEBUG 日志记录 request/response 和 token 粗略估算
 
-实现位置：`utils/logger.py`
+### 9. 日志系统
 
-- 日志格式：`[时间] [级别] [模块] [会话名] 内容`
-- 控制台输出 INFO 及以上。
-- 文件输出 DEBUG 及以上。
-- 日志文件按天保存：`logs/YYYY-MM-DD.log`
-- 自动清理 30 天前日志。
+日志工具位于 `utils/logger.py`。
 
-## 配置
+日志格式：
 
-统一配置在 `config.py`。
+```text
+[时间] [级别] [模块] [会话名] 内容
+```
+
+输出策略：
+
+- 文件：DEBUG 及以上
+- 普通模块默认可输出 INFO 及以上到控制台
+- 交互式 CLI 启动后会关闭控制台日志，只向用户展示输入提示和客服回答
+- 按天保存：`logs/YYYY-MM-DD.log`
+- 自动保留最近 30 天
+
+CLI 用户可见内容示例：
+
+```text
+[对话一|消费者] 请输入客服问题(输入【退出】结束程序)：
+客服回答：...
+```
+
+类似 `[2026-07-28 02:34:15] [WARNING] ... 输入被过滤 ...` 的日志不会显示给 CLI 用户，但仍会写入 `logs/YYYY-MM-DD.log` 便于排查。
+
+主要埋点：
+
+- 用户输入
+- LLM 调用前后
+- HTTP 请求耗时和重试
+- 工具调用前后
+- RAG 检索 query/top_k/数量/平均 distance
+- JSON 读写
+- 登录成功/失败
+- RBAC 越权拦截
+
+### 10. 限流、缓存与去重
+
+实现位于 `utils/rate_limiter.py`。
+
+- API 限流：每分钟最多 30 次调用
+- `query_goods` 结果缓存：TTL 5 分钟
+- `rag_search` 结果缓存：TTL 10 分钟
+- 5 秒内同一会话相同 query 直接返回缓存答案，不重复调用 LLM
+
+### 11. 幻觉检测
+
+实现位于 `tools/hallucination_checker.py`。
+
+特点：
+
+- 不额外调用 LLM
+- 从回答中提取商品名、订单号、金额
+- 与工具返回数据比对
+- 检测 `绝对`、`肯定`、`保证`、`100%` 等过度承诺词
+- 输出 `0~1` 风险分
+- `score > 0.3` 视为有幻觉风险
+- 统计会话内幻觉风险占比
+
+## 配置说明
+
+统一配置文件：`config.py`
+
+配置分组：
 
 | 分组 | 内容 |
 | --- | --- |
 | `API` | `api_key`、`base_url`、`model_name`、`timeout`、`max_retry`、`temperature` |
-| `PATHS` | 数据目录、文档目录、ChromaDB 目录、记忆目录、日志目录、各 JSON 文件路径 |
-| `RAG` | embedding 模型、fallback 模型、chunk 参数、相似度阈值 |
+| `PATHS` | 数据目录、文档目录、ChromaDB 目录、日志目录、用户和业务 JSON 路径 |
+| `RAG` | 主 embedding 模型、备用 embedding 模型、chunk 参数、距离阈值 |
 | `SESSION` | 默认会话名、最大消息轮数、摘要保留轮数 |
 | `AGENT` | 最大 LLM 工具循环次数、LLM temperature |
 
-支持环境变量覆盖，例如：
-
-```powershell
-$env:AGENT_API_KEY="你的 API Key"
-$env:AGENT_BASE_URL="https://apihub.agnes-ai.com/v1"
-$env:AGENT_MODEL_NAME="agnes-2.0-flash"
-```
-
-代码中通过以下方式读取配置：
+代码读取方式：
 
 ```python
 import config
@@ -199,68 +256,147 @@ import config
 api_key = config.get("API", "api_key")
 ```
 
-## 快速启动
+环境变量覆盖规则：
+
+- `AGENT_API_KEY` 覆盖 `API.api_key`
+- `AGENT_BASE_URL` 覆盖 `API.base_url`
+- `AGENT_MODEL_NAME` 覆盖 `API.model_name`
+- `AGENT_RAG_DISTANCE_THRESHOLD` 覆盖 `RAG.distance_threshold`
+- `AGENT_RAG_FALLBACK_MODEL` 覆盖 `RAG.fallback_model`
+
+PowerShell 示例：
+
+```powershell
+$env:AGENT_API_KEY="你的 API Key"
+$env:AGENT_BASE_URL="https://apihub.agnes-ai.com/v1"
+$env:AGENT_MODEL_NAME="agnes-2.0-flash"
+```
+
+永久写入当前 Windows 用户环境变量：
+
+```powershell
+setx AGENT_API_KEY "你的 API Key"
+setx AGENT_BASE_URL "https://apihub.agnes-ai.com/v1"
+setx AGENT_MODEL_NAME "agnes-2.0-flash"
+```
+
+设置后需要重新打开终端。
+
+## 安装与启动
+
+进入项目目录：
 
 ```powershell
 cd F:\code\project1
+```
+
+安装依赖：
+
+```powershell
+pip install -r requirements.txt
+```
+
+启动 CLI：
+
+```powershell
 python agent\main_agent.py
 ```
 
-启动后按提示选择角色并登录。首次运行会自动初始化账号文件。
+## 模型与向量库维护
 
-## 常用维护命令
+当前推荐本地模型目录：
 
-构建政策文档和商品向量：
+```text
+models/
+├─ bge-base-zh-v1.5/
+└─ paraphrase-multilingual-MiniLM-L12-v2/
+```
+
+主模型 768 维和备用模型 384 维不能写入同一个 ChromaDB，因此项目使用两个独立向量库：
+
+```text
+datas/chroma_db
+datas/chroma_db_384
+```
+
+构建主 768 维向量库：
 
 ```powershell
 python embedding\rag_pipeline.py
 ```
 
-单独运行测试：
+构建备用 384 维向量库：
 
 ```powershell
-python test_auth.py
-python test_rbac.py
-python test_business_tools.py
-python test_edge_cases.py
+python -c "from embedding.rag_pipeline import build_vector_db_docs_384, build_vector_db_goods_384; print(build_vector_db_docs_384()); print(build_vector_db_goods_384())"
+```
+
+验证 384 模型维度：
+
+```powershell
+python -c "from sentence_transformers import SentenceTransformer; m=SentenceTransformer(r'F:\code\project1\models\paraphrase-multilingual-MiniLM-L12-v2'); print(len(m.encode(['测试'])[0]))"
+```
+
+如果 HuggingFace 下载慢，可使用镜像：
+
+```powershell
+$env:HF_ENDPOINT="https://hf-mirror.com"
+python -c "from huggingface_hub import snapshot_download; snapshot_download(repo_id='sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2', local_dir=r'F:\code\project1\models\paraphrase-multilingual-MiniLM-L12-v2')"
+```
+
+如本机使用代理，可临时指定：
+
+```powershell
+$env:HTTPS_PROXY="http://127.0.0.1:7897"
+$env:HTTP_PROXY="http://127.0.0.1:7897"
+```
+
+## 测试说明
+
+一键运行全部测试：
+
+```powershell
+python run_all_test.py
+```
+
+测试文件位于 `test/`，每个脚本都可独立运行。
+
+| 测试文件 | 验证内容 |
+| --- | --- |
+| `test_auth.py` | 登录、注册、密码哈希、用户文件初始化、RBAC 集成 |
+| `test_rbac.py` | 权限白名单、Schema 过滤、越权拦截、商品脱敏、角色提示词 |
+| `test_business_tools.py` | 商品、库存、订单、售后、商品更新、销售报表 |
+| `test_rag.py` | Chroma 连接、商品检索、政策检索、低相似度过滤、top_k |
+| `test_edge_cases.py` | 会话损坏恢复、并发 JSON 写入、超长输入、API 超时、角色切换 |
+| `test_config.py` | 配置默认值和环境变量覆盖 |
+| `test_error_handler.py` | 输入校验、工具参数校验、RAG 兜底、会话摘要、文件锁 |
+| `test_api_monitor.py` | HTTP 状态码处理、超时、重试、降级 |
+| `test_logger.py` | 日志格式、文件输出、30 天清理、CLI 控制台日志关闭 |
+| `test_logging_integration.py` | 登录、RBAC、data_loader 日志埋点 |
+| `test_prompt_manager.py` | 提示词模板、动态拼接、Agent 集成 |
+| `test_rate_limiter.py` | API 限流、TTL 缓存、重复提问去重 |
+| `test_hallucination_checker.py` | 商品名、订单号、金额、承诺词检测和风险统计 |
+| `test_agent_error_integration.py` | Agent 输入过滤、工具参数校验、异常兜底集成 |
+| `test_agent_rate_limiter_integration.py` | Agent 重复提问缓存，不重复调用 LLM |
+| `test_context_window.py` | 打开/切换会话展示最近 5 条，多用户会话隔离 |
+| `test_rag_pipeline_fallback.py` | Chroma 异常时 RAG 降级 |
+| `test_rag_vector_maintenance.py` | 向量去重、单商品更新、全量重建、关键词降级 |
+| `test_run_all_test.py` | 批量测试脚本自身的发现、执行、统计 |
+
+常用单测命令：
+
+```powershell
+python test\test_auth.py
+python test\test_business_tools.py
+python test\test_rag.py
+python test\test_edge_cases.py
 ```
 
 编译检查：
 
 ```powershell
-python -m py_compile agent\main_agent.py tools\data_loader.py tools\rbac.py embedding\rag_pipeline.py
+python -m py_compile config.py agent\main_agent.py embedding\rag_pipeline.py tools\data_loader.py tools\schema.py
 ```
-
-## 测试脚本
-
-当前测试脚本均可独立运行，使用简单 PASS/FAIL 统计输出。
-
-| 文件 | 覆盖范围 |
-| --- | --- |
-| `test_auth.py` | 登录认证、密码安全、注册、登录、RBAC 集成 |
-| `test_rbac.py` | 权限白名单、schema 过滤、越权拦截、商品脱敏、角色提示词 |
-| `test_business_tools.py` | 商品、库存、订单、售后、商品更新、销售报表工具回归 |
-| `test_edge_cases.py` | 会话损坏、并发 JSON 写入、超长输入、API 超时、角色切换清空上下文 |
-| `test_rag.py` | RAG 连接、商品检索、政策检索、低相似度、top_k |
-| `test_error_handler.py` | 输入校验、工具参数校验、RAG 兜底、会话摘要、文件锁 |
-| `test_api_monitor.py` | HTTP 状态码处理、超时、重试、降级 |
-| `test_logger.py` | 日志格式、按天文件、30 天清理 |
-| `test_logging_integration.py` | 登录、RBAC、data_loader 日志埋点 |
-| `test_prompt_manager.py` | 提示词模板、动态拼接、Agent 集成 |
-| `test_config.py` | 配置默认值和环境变量覆盖 |
-| `test_rate_limiter.py` | 令牌桶、TTL 缓存、重复提问去重 |
-| `test_hallucination_checker.py` | 幻觉检测规则和会话统计 |
-| `test_agent_rate_limiter_integration.py` | Agent 重复提问不重复调用 LLM |
-| `test_rag_pipeline_fallback.py` | ChromaDB 不可用时 RAG 降级 |
-| `test_rag_vector_maintenance.py` | 向量去重、单商品更新、全量重建回滚、关键词降级 |
-
-## 当前已知限制
-
-- `query_order()` 当前只支持按订单号和商品 ID 查询，不支持时间筛选参数。
-- `create_aftersale_ticket()` 当前会自动补齐缺失字段，不会拒绝字段不完整的工单。
-- `test_rag.py` 依赖本地 embedding 模型和 ChromaDB 可用；如果模型无法加载或向量库为空，相关检索测试会失败，但主程序会走降级路径。
-- `requirements.txt` 当前未列出 `jieba`；关键词降级检索会在缺少 `jieba` 时使用正则分词。
-- README 说明以当前 Python CLI 项目为准，未包含 Web API 或 Gradio 启动入口。
 
 ## 目录结构
 
@@ -285,17 +421,63 @@ project1/
 ├─ datas/
 │  ├─ docs/
 │  ├─ chroma_db/
+│  ├─ chroma_db_384/
 │  ├─ consumer_users.json
 │  ├─ merchant_users.json
 │  ├─ 货品基础数据.json
 │  ├─ 库存数据.json
 │  ├─ 订单数据.json
 │  └─ 售后工单.json
+├─ models/
+│  ├─ bge-base-zh-v1.5/
+│  └─ paraphrase-multilingual-MiniLM-L12-v2/
 ├─ agent_memory/
 ├─ logs/
-├─ models/
+├─ test/
+│  └─ test_*.py
 ├─ config.py
+├─ run_all_test.py
 ├─ requirements.txt
-├─ README
-└─ test_*.py
+└─ README
 ```
+
+## 常见问题
+
+### API 密钥读取失败
+
+确认当前终端里存在环境变量：
+
+```powershell
+echo $env:AGENT_API_KEY
+```
+
+如果为空，设置后重新打开终端：
+
+```powershell
+setx AGENT_API_KEY "你的 API Key"
+```
+
+### jieba 无法解析导入
+
+安装依赖：
+
+```powershell
+pip install jieba
+```
+
+或一次性安装全部依赖：
+
+```powershell
+pip install -r requirements.txt
+```
+
+### 乱码输入仍返回商品
+
+当前 `rag_search()` 已在入口拦截短英文数字乱码，例如 `xyz123xyz` 会直接返回空列表。正常商品 ID 如 `SP014` 不会被拦截。
+
+### 768 维和 384 维模型能否共用向量库
+
+不能。不同维度 embedding 不能写入同一个 Chroma collection。本项目已经分离为：
+
+- 768 维：`datas/chroma_db`
+- 384 维：`datas/chroma_db_384`

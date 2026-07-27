@@ -124,20 +124,28 @@ def query_stock(goods_id: Optional[str] = None) -> List[Dict]:
     return [s for s in _stock_data if str(s.get("商品ID", "")).upper() == str(goods_id).upper()]
 
 
-def query_order(order_id: Optional[str] = None, goods_id: Optional[str] = None) -> List[Dict]:
+def query_order(
+    order_id: Optional[str] = None,
+    goods_id: Optional[str] = None,
+    start_time: Optional[str] = None,
+    end_time: Optional[str] = None,
+) -> List[Dict]:
     """
     查询订单
     :param order_id: 订单号精确查询
     :param goods_id: 根据商品id查询所有相关订单
+    :param start_time: 起始日期，格式 YYYY-MM-DD
+    :param end_time: 结束日期，格式 YYYY-MM-DD
     """
     res = []
     for order in _order_data:
-        if order_id and order.get("订单号") == order_id:
-            res.append(order)
-        elif goods_id and str(order.get("商品ID", "")).upper() == str(goods_id).upper():
-            res.append(order)
-        elif not order_id and not goods_id:
-            res.append(order)
+        if order_id and order.get("订单号") != order_id:
+            continue
+        if goods_id and str(order.get("商品ID", "")).upper() != str(goods_id).upper():
+            continue
+        if not _order_time_in_range(order.get("下单时间", ""), start_time, end_time):
+            continue
+        res.append(order)
     return res
 
 
@@ -163,17 +171,43 @@ def create_aftersale_ticket(new_ticket: Dict) -> Dict:
     for k, v in new_ticket.items():
         real_key = alias_map.get(str(k).strip(), k)
         normalized[real_key] = v
+    required_fields = ["工单ID", "关联订单号", "问题类型", "处理状态"]
+    missing_fields = [
+        field for field in required_fields
+        if not str(normalized.get(field, "")).strip()
+    ]
+    if missing_fields:
+        return {
+            "status": "fail",
+            "msg": f"缺少必填字段：{', '.join(missing_fields)}",
+        }
     # 补全默认字段，保证与历史工单结构一致
-    normalized.setdefault("工单ID", f"WG{datetime.datetime.now().strftime('%Y%m%d%H%M%S')}")
-    normalized.setdefault("关联订单号", "")
-    normalized.setdefault("问题类型", "未分类")
-    normalized.setdefault("处理状态", "待处理")
     normalized.setdefault("处理记录", "暂未安排客服跟进")
     normalized.setdefault("创建时间", datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
 
     _aftersale_data.append(normalized)
     save_json(AFTERSALE_PATH, _aftersale_data)
     return {"status": "success", "ticket": normalized}
+
+
+def _order_time_in_range(order_time: str, start_time: Optional[str], end_time: Optional[str]) -> bool:
+    if not start_time and not end_time:
+        return True
+    import datetime
+    try:
+        order_dt = datetime.datetime.strptime(order_time, "%Y-%m-%d %H:%M:%S")
+        if start_time:
+            start_dt = datetime.datetime.strptime(start_time, "%Y-%m-%d")
+            if order_dt < start_dt:
+                return False
+        if end_time:
+            end_dt = datetime.datetime.strptime(end_time, "%Y-%m-%d")
+            end_dt = end_dt.replace(hour=23, minute=59, second=59)
+            if order_dt > end_dt:
+                return False
+    except Exception:
+        return False
+    return True
 
 
 def get_all_orders() -> List[Dict]:

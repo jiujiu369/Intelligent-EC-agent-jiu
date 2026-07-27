@@ -72,6 +72,15 @@ def get_logger(name: str) -> logging.Logger:
     return logging.getLogger(name)
 
 
+def set_console_logging_enabled(enabled: bool) -> None:
+    _configure_logging()
+    level = logging.INFO if enabled else logging.CRITICAL + 1
+    root_logger = logging.getLogger()
+    for handler in root_logger.handlers:
+        if getattr(handler, "_agent_console_handler", False):
+            handler.setLevel(level)
+
+
 def _configure_logging() -> None:
     global _CONFIGURED
     with _LOGGER_LOCK:
@@ -93,6 +102,7 @@ def _configure_logging() -> None:
         console_handler.setFormatter(formatter)
         console_handler.addFilter(_SessionFilter())
         console_handler._agent_logger_handler = True  # type: ignore[attr-defined]
+        console_handler._agent_console_handler = True  # type: ignore[attr-defined]
 
         file_handler = _DailyFileHandler(_get_log_dir(), level=logging.DEBUG)
         file_handler.setFormatter(formatter)
