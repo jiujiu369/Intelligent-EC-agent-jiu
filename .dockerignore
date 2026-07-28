@@ -1,0 +1,28 @@
+# 排除不需要打进镜像的内容
+.venv/
+__pycache__/
+*.pyc
+.git/
+.gitignore
+
+# 本地模型目录（云端运行时从 HuggingFace 下载，不打包）
+models/
+
+# 本地生成的向量库与会话记忆（运行时重建 / 挂载卷）
+datas/chroma_db/
+datas/chroma_db_384/
+datas/agent_memory/
+logs/
+*.db
+
+# 密钥不进镜像（由宿主机 .env 通过 env_file 注入）
+.env
+
+# 部署脚本与测试不进镜像
+deploy/
+test/
+
+# 文档
+README*
+Dockerfile
+.dockerignore

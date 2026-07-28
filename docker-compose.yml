@@ -1,0 +1,22 @@
+services:
+  agent:
+    build: .
+    container_name: ecommerce-agent
+    ports:
+      - "7860:7860"
+    env_file:
+      - .env
+    environment:
+      - PORT=7860
+      - HF_HOME=/app/.cache/hf
+      # 云端无本地模型，运行时从 HuggingFace 自动下载
+      - AGENT_RAG_EMBEDDING_MODEL=BAAI/bge-base-zh-v1.5
+      - AGENT_RAG_FALLBACK_MODEL=sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2
+    volumes:
+      - agent_data:/app/datas
+      - agent_cache:/app/.cache
+    restart: unless-stopped
+
+volumes:
+  agent_data:
+  agent_cache:

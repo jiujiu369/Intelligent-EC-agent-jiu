@@ -1,6 +1,6 @@
-# app.py — Hugging Face Spaces 云端部署入口
+# app.py — 云端部署入口（Oracle VM / 任意支持 Docker 的平台）
 # 复用 web_ui.py 的全部 UI 与业务逻辑，仅补充云启动时必需的向量库构建。
-# 本地仍可照常用 web_ui.py；本文件仅供云端（HF Spaces）使用。
+# 本地仍可照常用 web_ui.py；本文件供云端容器化部署使用。
 
 import os
 
