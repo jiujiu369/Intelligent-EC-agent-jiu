@@ -1,6 +1,32 @@
 import os
 from typing import Any, Dict
 
+# ---------- 自动加载 .env 文件 ----------
+try:
+    from dotenv import load_dotenv  # type: ignore[import-untyped]
+
+    _env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
+    if os.path.exists(_env_path):
+        load_dotenv(_env_path)
+except ImportError:
+    pass
+
+# ---------- 项目根目录 ----------
+ROOT = os.path.dirname(os.path.abspath(__file__))
+
+
+def _model_path(relative: str) -> str:
+    """拼接模型路径：优先使用 .env 覆盖，其次绝对路径兼容，最后相对路径。"""
+    env_key = f"AGENT_RAG_{relative.upper().replace('-', '_').replace('.', '_')}"
+    env_val = os.environ.get(env_key)
+    if env_val and os.path.exists(env_val):
+        return env_val
+    # 兼容旧版 Windows 绝对路径：如果 models/ 在项目根存在则用相对路径
+    candidate = os.path.join(ROOT, "models", relative)
+    if os.path.exists(candidate):
+        return candidate
+    return candidate  # 返回相对路径，由 rag_pipeline 的 _resolve_model_name 兜底
+
 
 API: Dict[str, Any] = {
     "api_key": "",
@@ -27,8 +53,8 @@ PATHS: Dict[str, Any] = {
 }
 
 RAG: Dict[str, Any] = {
-    "embedding_model": r"F:\code\project1\models\bge-base-zh-v1.5",
-    "fallback_model": r"F:\code\project1\models\paraphrase-multilingual-MiniLM-L12-v2",
+    "embedding_model": _model_path("bge-base-zh-v1.5"),
+    "fallback_model": _model_path("paraphrase-multilingual-MiniLM-L12-v2"),
     "chunk_size": 384,
     "chunk_overlap": 64,
     "distance_threshold": 1.5,

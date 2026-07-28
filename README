@@ -1,6 +1,6 @@
 # 电商客服 Agent
 
-Python CLI 版电商客服智能助手。项目入口为 `agent/main_agent.py`，通过 LLM Function Call 调用本地业务工具，支持登录认证、角色权限、商品/库存/订单/售后处理、RAG 知识库检索、会话记忆、统一配置、日志、限流缓存、异常兜底和规则型幻觉检测。
+Python 版电商客服智能助手。CLI 入口为 `agent/main_agent.py`，Gradio UI 入口为 `ui/gradio_app.py`。项目通过 LLM Function Call 调用本地业务工具，支持登录认证、角色权限、商品/库存/订单/售后处理、RAG 知识库检索、会话记忆、统一配置、日志、限流缓存、异常兜底和规则型幻觉检测。
 
 ## 当前功能
 
@@ -124,7 +124,27 @@ CLI 命令：
 | `清空所有对话记忆` | 清空当前用户全部会话 |
 | `退出` | 退出程序 |
 
-### 6. 提示词管理
+### 6. Gradio 图形界面
+
+UI 入口位于 `ui/gradio_app.py`，复用现有登录、会话和 Agent 调用逻辑。
+
+界面区域：
+
+| 区域 | 功能 |
+| --- | --- |
+| 登录页 | 选择买家/商家，输入用户名和密码登录，支持注册新账号 |
+| 会话区 | 新建、切换、清空会话，并显示最近 5 条聊天记录 |
+| 聊天区 | 发送客服问题，顶部固定提示输入 `帮助` / `菜单` |
+| 运维演示区 | 仅商家可见，可查看当前商家会话信息并一键运行全部测试 |
+
+权限规则：
+
+- 首屏仅显示登录页，登录成功后切换到聊天界面。
+- 买家登录后只能看到登录区、会话区和聊天区。
+- 商家登录后额外显示运维演示区。
+- 运维演示区后端仍会二次校验角色，买家无法通过函数直接执行运维测试。
+
+### 7. 提示词管理
 
 提示词集中在 `tools/prompt_manager.py`。
 
@@ -143,7 +163,7 @@ CLI 命令：
 
 `main_agent.py` 不再硬编码系统提示词。
 
-### 7. 异常处理
+### 8. 异常处理
 
 异常处理集中在 `tools/error_handler.py`，并通过包装函数/调用前校验接入。
 
@@ -158,7 +178,7 @@ CLI 命令：
 - JSON 读写使用 `threading.Lock`
 - RAG 无结果返回：`暂未找到相关知识，建议联系人工客服`
 
-### 8. LLM API 客户端
+### 9. LLM API 客户端
 
 API 客户端位于 `utils/api_monitor.py`。
 
@@ -174,7 +194,7 @@ API 客户端位于 `utils/api_monitor.py`。
 - 超过重试上限返回：`系统繁忙，请稍后再试`
 - DEBUG 日志记录 request/response 和 token 粗略估算
 
-### 9. 日志系统
+### 10. 日志系统
 
 日志工具位于 `utils/logger.py`。
 
@@ -212,7 +232,7 @@ CLI 用户可见内容示例：
 - 登录成功/失败
 - RBAC 越权拦截
 
-### 10. 限流、缓存与去重
+### 11. 限流、缓存与去重
 
 实现位于 `utils/rate_limiter.py`。
 
@@ -221,7 +241,7 @@ CLI 用户可见内容示例：
 - `rag_search` 结果缓存：TTL 10 分钟
 - 5 秒内同一会话相同 query 直接返回缓存答案，不重复调用 LLM
 
-### 11. 幻觉检测
+### 12. 幻觉检测
 
 实现位于 `tools/hallucination_checker.py`。
 
@@ -303,6 +323,25 @@ pip install -r requirements.txt
 python agent\main_agent.py
 ```
 
+启动 Gradio UI：
+
+```powershell
+python ui\gradio_app.py
+```
+
+默认访问地址：
+
+```text
+http://127.0.0.1:7860
+```
+
+如需换端口：
+
+```powershell
+$env:GRADIO_SERVER_PORT="7861"
+python ui\gradio_app.py
+```
+
 ## 模型与向量库维护
 
 当前推荐本地模型目录：
@@ -380,6 +419,7 @@ python run_all_test.py
 | `test_agent_error_integration.py` | Agent 输入过滤、工具参数校验、异常兜底集成 |
 | `test_agent_rate_limiter_integration.py` | Agent 重复提问缓存，不重复调用 LLM |
 | `test_context_window.py` | 打开/切换会话展示最近 5 条，多用户会话隔离 |
+| `test_gradio_ui.py` | Gradio UI 登录页切换、注册校验、默认账号登录、权限显示、聊天区帮助/菜单提示 |
 | `test_rag_pipeline_fallback.py` | Chroma 异常时 RAG 降级 |
 | `test_rag_vector_maintenance.py` | 向量去重、单商品更新、全量重建、关键词降级 |
 | `test_run_all_test.py` | 批量测试脚本自身的发现、执行、统计 |
@@ -419,6 +459,8 @@ project1/
 │  ├─ api_monitor.py
 │  ├─ logger.py
 │  └─ rate_limiter.py
+├─ ui/
+│  └─ gradio_app.py
 ├─ datas/
 │  ├─ docs/
 │  ├─ chroma_db/

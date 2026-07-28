@@ -32,6 +32,27 @@ from tools.auth_login import (
 )
 from utils.logger import get_logger, set_console_logging_enabled
 
+HELP_TEXT = """已有对话 或 历史对话：    查看已有会话列表
+新建对话 <名字>：         创建并切换到新会话（可省略空格）
+切换到 <对话名称>：       切换到已有会话（可省略空格）
+重新登录：                更换身份（买家/商家），切换后清空上下文
+清空当前记忆：            清空当前会话记忆
+清空所有对话记忆：        清空所有会话记忆
+帮助：                    显示命令帮助
+菜单：                    显示可执行指令
+退出：                    退出程序"""
+
+API_KEY_WARN = """⚠️ 未检测到 API 密钥！请在项目根目录 .env 文件中配置：
+
+AGENT_API_KEY=sk-...
+
+或在启动前设置环境变量（PowerShell）：
+$env:AGENT_API_KEY="sk-..."
+
+当前 Agent 只能返回��底回复，无法调用大模型。"""
+
+
+
 set_console_logging_enabled(False)
 logger = get_logger(__name__)
 init_auth_files()
@@ -59,23 +80,30 @@ def _status_text(state):
 # ====================== 回调函数 ======================
 
 def do_login(role_radio, username, password):
-    """登录：成功切换到主界面，失败提示。"""
+    """登录：成功切换到主界面，失败提示。检测 API Key 是否已配置。"""
+    import config
     role = ROLE_CONSUMER if "消费者" in str(role_radio) else ROLE_MERCHANT
     username = (username or "").strip()
     ok, msg, r = login_user(role, username, password or "")
     if not ok:
         return (
             gr.update(visible=True), gr.update(visible=False),
-            msg, {}, [], gr.update(choices=[], value=None), "未登录", "",
+            msg, {}, [], gr.update(choices=[], value=None), "未登录", "", "",
         )
     state = {"role": r, "username": username, "session": DEFAULT_SESSION}
     sessions = list_sessions(username, r)
     history = _load_history(DEFAULT_SESSION, username, r)
+    # API Key 空值检测
+    api_key = config.get("API", "api_key")
+    if not api_key or api_key.strip() in ("", "your_api_key_here"):
+        warn = API_KEY_WARN
+    else:
+        warn = ""
     return (
         gr.update(visible=False), gr.update(visible=True),
         f"✅ {msg}", state, history,
         gr.update(choices=sessions, value=DEFAULT_SESSION),
-        _status_text(state), "",
+        _status_text(state), warn, "",
     )
 
 
@@ -88,22 +116,30 @@ def do_register(role_radio, username, password):
 
 
 def chat_respond(message, history, state):
-    """发送消息，调用 Agent 获取回答。"""
+    """发送消息，调用 Agent 获取回答。支持帮助/菜单快捷命令。"""
     if not state or not state.get("username"):
         return history, "", "请先登录"
     message = (message or "").strip()
     if not message:
         return history, "", _status_text(state)
-    try:
-        answer = run_agent(
-            message,
-            session_name=state["session"],
-            current_role=state["role"],
-            current_username=state["username"],
-        )
-    except Exception as e:
-        answer = f"⚠️ 处理出错：{e}"
-        logger.error(f"Web UI chat 异常: {e}")
+
+    # 快捷命令：帮助 / 菜单
+    if message == "帮助":
+        answer = f"📖 **命令帮助**\n\n{HELP_TEXT}"
+    elif message == "菜单":
+        answer = f"📋 **可执行指令**\n\n{HELP_TEXT}"
+    else:
+        try:
+            answer = run_agent(
+                message,
+                session_name=state["session"],
+                current_role=state["role"],
+                current_username=state["username"],
+            )
+        except Exception as e:
+            answer = f"⚠️ 处理出错：{e}"
+            logger.error(f"Web UI chat 异常: {e}")
+
     history = history + [
         {"role": "user", "content": message},
         {"role": "assistant", "content": answer},
@@ -159,7 +195,7 @@ def relogin():
     """重新登录：回到登录页，清空状态。"""
     return (
         gr.update(visible=True), gr.update(visible=False),
-        "", {}, [], gr.update(choices=[], value=None), "未登录", "",
+        "", {}, [], gr.update(choices=[], value=None), "未登录", "", "",
     )
 
 
@@ -204,6 +240,10 @@ with gr.Blocks(title="电商客服 Agent") as demo:
         # 左侧聊天区
         with gr.Column(scale=3):
             status_bar = gr.Markdown("未登录", elem_classes=["status-bar"])
+            api_key_warn = gr.Markdown("")
+            gr.Markdown(
+                "💡 **提示**：输入「帮助」查看全部会话管理命令，输入「菜单」查看可执行指令"
+            )
             chatbot = gr.Chatbot(label="对话", height=480)
             with gr.Row():
                 msg_box = gr.Textbox(
@@ -227,7 +267,7 @@ with gr.Blocks(title="电商客服 Agent") as demo:
     # ===== 事件绑定 =====
     login_outputs = [
         login_view, main_view, login_status, state,
-        chatbot, session_dropdown, status_bar, password_box,
+        chatbot, session_dropdown, status_bar, api_key_warn, password_box,
     ]
     login_btn.click(do_login, [role_radio, username_box, password_box], login_outputs)
     register_btn.click(do_register, [role_radio, username_box, password_box], [login_status])

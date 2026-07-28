@@ -125,5 +125,50 @@
   {
     "role": "assistant",
     "content": "API 密钥失效，请检查配置后重试"
+  },
+  {
+    "role": "user",
+    "content": "tc"
+  },
+  {
+    "content": "您好！我注意到您输入了\"tc\"，但不太清楚您想表达什么。如果您是想查询充电宝商品，或者有其他需要帮助的地方，请告诉我，我会尽力为您服务！😊",
+    "role": "assistant"
+  },
+  {
+    "role": "user",
+    "content": "买东西了"
+  },
+  {
+    "content": "好的！如果您已经购买了商品，我可以帮您查询订单信息。请问您有订单号吗？或者您可以通过商品ID、下单时间范围来查询订单。请提供相关信息，我会帮您查询订单状态和详情。",
+    "role": "assistant"
+  },
+  {
+    "role": "user",
+    "content": "买充电宝"
+  },
+  {
+    "content": "用户想买充电宝，我需要查询充电宝商品。使用query_goods工具，goods_name参数为\"充电宝\"。\n</think>\n\n",
+    "role": "assistant",
+    "tool_calls": [
+      {
+        "index": 0,
+        "function": {
+          "arguments": "{\"goods_name\": \"充电宝\"}",
+          "name": "query_goods"
+        },
+        "id": "call_5104d32fa6764c71bf4822c5",
+        "type": "function"
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "call_5104d32fa6764c71bf4822c5",
+    "name": "query_goods",
+    "content": "[{\"商品ID\": \"SP206\", \"名称\": \"3C数码便携式移动电源充电宝\", \"分类\": \"3C数码\", \"售价\": 149, \"规格\": \"20000mAh 大容量 快速充电\", \"图文摘要\": \"便携移动电源，支持多设备快速充电，适合旅行和日常使用\"}]"
+  },
+  {
+    "content": "好的，我们有一款充电宝在售：\n\n**3C数码便携式移动电源充电宝**\n- 售价：149元\n- 规格：20000mAh 大容量，快速充电\n- 特点：便携移动电源，支持多设备快速充电，适合旅行和日常使用\n\n需要我帮您查询这款商品的库存情况吗？",
+    "role": "assistant"
   }
 ]

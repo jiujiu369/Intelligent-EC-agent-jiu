@@ -89,7 +89,17 @@ class CloudLLMClient:
                 )
 
                 resp.raise_for_status()
-                resp_json = resp.json()
+                try:
+                    resp_json = resp.json()
+                except (json.JSONDecodeError, ValueError) as e:
+                    logger.error(
+                        f"API响应非JSON status=200 error={str(e)}",
+                        extra={"session_name": session_name},
+                    )
+                    if attempt < self.max_retry:
+                        time.sleep(min(2 ** attempt, 4))
+                        continue
+                    return llm_fallback_response(BUSY_MESSAGE)
                 logger.debug(
                     "LLM response=%s token_estimate=%s",
                     json.dumps(resp_json, ensure_ascii=False),
