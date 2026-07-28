@@ -49,6 +49,20 @@ def rate_limit(func: Callable) -> Callable:
     return wrapper
 
 
+# 登录专用限流器：比 API 更严格，防止公网暴力破解
+# 60 秒内最多 10 次登录尝试（含成功与失败），超出则阻塞到下一个窗口
+_LOGIN_RATE_LIMITER = TokenBucketRateLimiter(max_calls=10, window_seconds=60)
+
+
+def rate_limit_login(func: Callable) -> Callable:
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        _LOGIN_RATE_LIMITER.acquire()
+        return func(*args, **kwargs)
+
+    return wrapper
+
+
 def _make_cache_key(func_name: str, args: Tuple[Any, ...], kwargs: Dict[str, Any]) -> Tuple[str, str]:
     raw = json.dumps({"args": args, "kwargs": kwargs}, ensure_ascii=False, sort_keys=True, default=str)
     return func_name, hashlib.sha256(raw.encode("utf-8")).hexdigest()

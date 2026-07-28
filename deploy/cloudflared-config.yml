@@ -1,0 +1,17 @@
+# Cloudflare 命名隧道配置文件（可选，用于自定义域名 / Access 场景）
+#
+# 用法：
+#   cloudflared tunnel --config deploy/cloudflared-config.yml run agent
+#
+# 凭证文件路径在 `cloudflared tunnel create agent` 后会打印，
+# 默认位于 C:\Users\<用户名>\.cloudflared\<tunnel-id>.json
+
+tunnel: agent
+credentials-file: C:\Users\<你的用户名>\.cloudflared\<tunnel-id>.json
+
+ingress:
+  # 自定义域名（需先在 Cloudflare 托管域名并添加 CNAME 指向本隧道）
+  - hostname: kefu.你的域名.com
+    service: http://localhost:7860
+  # 兜底：使用 https://<tunnel-id>.cfargotunnel.com 也可访问
+  - service: http://localhost:7860

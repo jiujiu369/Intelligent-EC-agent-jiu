@@ -4,7 +4,7 @@
 # 设计原则：
 #   1. 密码采用 PBKDF2-SHA256 加盐哈希，严禁明文保存
 #   2. 账号文件按角色拆分：consumer_users.json / merchant_users.json
-#   3. 文件自动初始化（含预设测试账号），无需手动创建
+#   3. 文件自动初始化（空文件，无预设账号），无需手动创建
 #   4. 不依赖 RAG、业务工具、Agent 代码，完全独立可集成
 #   5. 完善的输入异常捕获与用户提示
 # ============================================================
@@ -18,6 +18,7 @@ from typing import Tuple, Optional
 
 import config
 from utils.logger import get_logger
+from utils.rate_limiter import rate_limit_login
 
 logger = get_logger(__name__)
 
@@ -47,21 +48,9 @@ HASH_ITERATIONS = 100_000   # PBKDF2 迭代次数，业内推荐 ≥ 100k
 SALT_LENGTH = 32            # 盐值长度（字节）
 KEY_LENGTH = 32             # 派生密钥长度（字节）
 
-# ====================== 预设测试账号 ======================
-
-_DEFAULT_CONSUMER = {
-    "user1": {
-        "password_hash": "",    # 运行时动态生成密文
-        "_plain_preset": "123456",
-    },
-}
-
-_DEFAULT_MERCHANT = {
-    "admin": {
-        "password_hash": "",
-        "_plain_preset": "admin123",
-    },
-}
+# ====================== 预设账号（已移除） ======================
+# 不再提供任何预设/测试账号。用户必须通过注册流程自行创建账号。
+# 如需恢复演示账号，请在此手动定义并调用 _init_with_preset。
 
 
 # ====================== 密码哈希 ======================
@@ -108,39 +97,27 @@ def _constant_time_compare(a: str, b: str) -> bool:
 
 def init_auth_files() -> None:
     """
-    自动初始化账号文件。
-    - consumer_users.json —— 预置测试买家账号 user1/123456
-    - merchant_users.json —— 预置测试商家账号 admin/admin123
+    自动初始化账号文件（无预设账号，仅创建空文件）。
+    - consumer_users.json / merchant_users.json
     如果文件已存在则跳过，不会覆盖已有数据。
     """
     os.makedirs(DATA_DIR, exist_ok=True)
 
-    # -- 买家文件 --
-    if not os.path.exists(CONSUMER_FILE):
-        _init_with_preset(CONSUMER_FILE, _DEFAULT_CONSUMER, ROLE_CONSUMER)
-    else:
-        # 文件存在但可能格式有误，做一次健壮读取校验
-        try:
-            with open(CONSUMER_FILE, "r", encoding="utf-8") as f:
-                json.load(f)
-        except (json.JSONDecodeError, Exception):
-            print(f"[WARNING] {CONSUMER_FILE} 格式异常，将重新初始化")
-            _init_with_preset(CONSUMER_FILE, _DEFAULT_CONSUMER, ROLE_CONSUMER)
-
-    # -- 商家文件 --
-    if not os.path.exists(MERCHANT_FILE):
-        _init_with_preset(MERCHANT_FILE, _DEFAULT_MERCHANT, ROLE_MERCHANT)
-    else:
-        try:
-            with open(MERCHANT_FILE, "r", encoding="utf-8") as f:
-                json.load(f)
-        except (json.JSONDecodeError, Exception):
-            print(f"[WARNING] {MERCHANT_FILE} 格式异常，将重新初始化")
-            _init_with_preset(MERCHANT_FILE, _DEFAULT_MERCHANT, ROLE_MERCHANT)
+    for file_path, role in ((CONSUMER_FILE, ROLE_CONSUMER), (MERCHANT_FILE, ROLE_MERCHANT)):
+        if not os.path.exists(file_path):
+            _init_with_preset(file_path, {}, role)
+        else:
+            # 文件存在但可能格式有误，做一次健壮读取校验
+            try:
+                with open(file_path, "r", encoding="utf-8") as f:
+                    json.load(f)
+            except (json.JSONDecodeError, Exception):
+                print(f"[WARNING] {file_path} 格式异常，将重新初始化为空文件")
+                _init_with_preset(file_path, {}, role)
 
 
 def _init_with_preset(file_path: str, preset: dict, role: str) -> None:
-    """用预设账号初始化文件，自动生成密码密文。"""
+    """初始化账号文件，写入 preset 中的账号（传空字典则仅创建空文件）。"""
     users = {}
     for username, info in preset.items():
         plain = info.get("_plain_preset", "")
@@ -241,6 +218,7 @@ def register_user(role: str, username: str, password: str) -> Tuple[bool, str]:
 
 # ====================== 登录校验 ======================
 
+@rate_limit_login
 def login_user(role: str, username: str, password: str) -> Tuple[bool, str, Optional[str]]:
     """
     登录校验。

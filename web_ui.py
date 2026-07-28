@@ -227,13 +227,13 @@ with gr.Blocks(title="电商客服 Agent") as demo:
         with gr.Column(elem_id="login-box"):
             gr.Markdown("### 登录 / 注册")
             role_radio = gr.Radio(["消费者", "商家"], value="消费者", label="选择角色")
-            username_box = gr.Textbox(label="用户名", placeholder="预设：user1 / admin")
-            password_box = gr.Textbox(label="密码", type="password", placeholder="预设：123456 / admin123")
+            username_box = gr.Textbox(label="用户名", placeholder="请输入用户名")
+            password_box = gr.Textbox(label="密码", type="password", placeholder="请输入密码")
             with gr.Row():
                 login_btn = gr.Button("登录", variant="primary")
                 register_btn = gr.Button("注册")
             login_status = gr.Markdown("")
-            gr.Markdown("<small>预设账号：消费者 <code>user1/123456</code>，商家 <code>admin/admin123</code></small>")
+            gr.Markdown("<small>首次使用请先注册账号</small>")
 
     # ===== 主界面视图 =====
     with gr.Row(visible=False) as main_view:
