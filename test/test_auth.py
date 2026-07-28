@@ -97,7 +97,7 @@ _assert(os.path.exists(MERCHANT_FILE), "merchant_users.json 已创建")
 # 验证文件内容结构
 cons = _load_users(ROLE_CONSUMER)
 merc = _load_users(ROLE_MERCHANT)
-_assert("user1" in cons, "消费者文件含预设账号 user1")
+_assert("user1" in cons, "买家文件含预设账号 user1")
 _assert("admin" in merc, "商家文件含预设账号 admin")
 
 # 验证每个用户包含必要字段
@@ -246,7 +246,7 @@ backup = _backup_files()
 _cleanup_test_files()
 init_auth_files()
 ok, msg, role = login_user(ROLE_CONSUMER, "user1", "123456")
-_assert(ok, f"消费者登录成功 → {msg}")
+_assert(ok, f"买家登录成功 → {msg}")
 consumer_role = role
 
 ok, msg, role = login_user(ROLE_MERCHANT, "admin", "admin123")
@@ -258,8 +258,10 @@ consumer_tools = get_allowed_tools(consumer_role)   # type: ignore[arg-type]
 merchant_tools = get_allowed_tools(merchant_role)   # type: ignore[arg-type]
 
 _assert(
-    "update_goods" not in consumer_tools and "export_sales_report" not in consumer_tools,
-    "消费者无权 update_goods / export_sales_report",
+    "update_goods" not in consumer_tools
+    and "export_sales_report" not in consumer_tools
+    and "query_stock" not in consumer_tools,
+    "买家无权 query_stock / update_goods / export_sales_report",
 )
 _assert(
     "update_goods" in merchant_tools and "export_sales_report" in merchant_tools,
@@ -269,7 +271,11 @@ _assert(
 # 越权拦截
 _assert(
     not check_permission("update_goods", consumer_role),   # type: ignore[arg-type]
-    "第二层防护：消费者 update_goods 被 check_permission 拦截",
+    "第二层防护：买家 update_goods 被 check_permission 拦截",
+)
+_assert(
+    not check_permission("query_stock", consumer_role),     # type: ignore[arg-type]
+    "第二层防护：买家 query_stock 被 check_permission 拦截",
 )
 _assert(
     check_permission("update_goods", merchant_role),       # type: ignore[arg-type]
@@ -284,11 +290,11 @@ sample_goods = [
 masked = mask_goods_data(sample_goods, consumer_role)      # type: ignore[arg-type]
 _assert(
     all("上架状态" not in item for item in masked),
-    "消费者 query_goods 结果不含上架状态（数据脱敏）",
+    "买家 query_goods 结果不含上架状态（数据脱敏）",
 )
 _assert(
     all("售价" in item for item in masked),
-    "消费者仍可见售价等非敏感字段",
+    "买家仍可见售价等非敏感字段",
 )
 
 unmasked = mask_goods_data(sample_goods, merchant_role)    # type: ignore[arg-type]

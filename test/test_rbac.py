@@ -48,24 +48,29 @@ def _dispatch_with_rbac(func_name, role, **kwargs):
 
 
 def test_permission_whitelist():
-    _assert(len(get_allowed_tools(ROLE_CONSUMER)) == 5, "consumer 权限白名单为 5 个工具")
+    _assert(len(get_allowed_tools(ROLE_CONSUMER)) == 4, "buyer 权限白名单为 4 个工具")
     _assert(len(get_allowed_tools(ROLE_MERCHANT)) == 7, "merchant 权限白名单为 7 个工具")
-    _assert("update_goods" not in get_allowed_tools(ROLE_CONSUMER), "consumer 无 update_goods 权限")
+    _assert("update_goods" not in get_allowed_tools(ROLE_CONSUMER), "buyer 无 update_goods 权限")
+    _assert("query_stock" not in get_allowed_tools(ROLE_CONSUMER), "buyer 无 query_stock 权限")
     _assert("export_sales_report" in get_allowed_tools(ROLE_MERCHANT), "merchant 有 export_sales_report 权限")
 
 
 def test_schema_filter():
     consumer_names = {s["function"]["name"] for s in get_filtered_schemas(ROLE_CONSUMER, tool_schemas)}
     merchant_names = {s["function"]["name"] for s in get_filtered_schemas(ROLE_MERCHANT, tool_schemas)}
-    _assert("update_goods" not in consumer_names, "consumer schemas 不含 update_goods")
-    _assert("export_sales_report" not in consumer_names, "consumer schemas 不含 export_sales_report")
+    _assert("update_goods" not in consumer_names, "buyer schemas 不含 update_goods")
+    _assert("export_sales_report" not in consumer_names, "buyer schemas 不含 export_sales_report")
+    _assert("query_stock" not in consumer_names, "buyer schemas 不含 query_stock")
     _assert("update_goods" in merchant_names, "merchant schemas 含 update_goods")
+    _assert("query_stock" in merchant_names, "merchant schemas 含 query_stock")
     _assert("export_sales_report" in merchant_names, "merchant schemas 含 export_sales_report")
 
 
 def test_permission_denied_dispatch():
     result = _dispatch_with_rbac("update_goods", ROLE_CONSUMER, goods_id="SP001", update_info={"售价": 1})
-    _assert(isinstance(result, dict) and result.get("status") == "denied", "consumer 调 update_goods 返回 status=denied")
+    _assert(isinstance(result, dict) and result.get("status") == "denied", "buyer 调 update_goods 返回 status=denied")
+    stock_result = _dispatch_with_rbac("query_stock", ROLE_CONSUMER, goods_id="SP001")
+    _assert(isinstance(stock_result, dict) and stock_result.get("status") == "denied", "buyer 调 query_stock 返回 status=denied")
 
 
 def test_query_goods_masking():
@@ -73,14 +78,14 @@ def test_query_goods_masking():
     consumer_view = mask_tool_result("query_goods", goods, ROLE_CONSUMER)
     merchant_view = mask_tool_result("query_goods", goods, ROLE_MERCHANT)
     _assert(bool(consumer_view), "query_goods 返回测试商品")
-    _assert(all("上架状态" not in item for item in consumer_view), "consumer 看不到 上架状态 字段")
+    _assert(all("上架状态" not in item for item in consumer_view), "buyer 看不到 上架状态 字段")
     _assert(any("上架状态" in item for item in merchant_view), "merchant 可以看到 上架状态 字段")
 
 
 def test_role_prompt_suffix():
     consumer_prompt = get_role_prompt_suffix(ROLE_CONSUMER)
     merchant_prompt = get_role_prompt_suffix(ROLE_MERCHANT)
-    _assert("消费者" in consumer_prompt and "无法修改商品" in consumer_prompt, "consumer 角色提示词包含正确角色描述")
+    _assert("买家" in consumer_prompt and "无法修改商品" in consumer_prompt and "查看库存" in consumer_prompt, "buyer 角色提示词包含正确角色描述")
     _assert("商家" in merchant_prompt and "export_sales_report" in merchant_prompt, "merchant 角色提示词包含角色描述和权限说明")
 
 

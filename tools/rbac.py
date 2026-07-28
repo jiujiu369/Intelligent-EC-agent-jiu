@@ -4,7 +4,7 @@
 # 设计原则：
 #   1. 双层防护 —— ① 传给 LLM 的 Function Schema 仅含当前角色允许的工具
 #                  ② 代码执行工具前二次校验，越权直接拦截
-#   2. 数据脱敏 —— 消费者查询商品时隐藏内部经营敏感字段
+#   2. 数据脱敏 —— 买家查询商品时隐藏内部经营敏感字段
 #   3. 角色切换 —— 切换角色时自动清空对话上下文缓存
 #   4. 复用现有工具函数，不改动 data_loader / rag_pipeline 源码
 # ============================================================
@@ -15,7 +15,7 @@ from utils.logger import get_logger
 logger = get_logger(__name__)
 
 # ====================== 角色定义 ======================
-ROLE_CONSUMER = "consumer"    # 消费者
+ROLE_CONSUMER = "consumer"    # 买家
 ROLE_MERCHANT = "merchant"    # 商家
 
 ALL_ROLES = {ROLE_CONSUMER, ROLE_MERCHANT}
@@ -26,7 +26,6 @@ ROLE_PERMISSIONS: Dict[str, Set[str]] = {
     ROLE_CONSUMER: {
         "rag_search",
         "query_goods",
-        "query_stock",
         "query_order",
         "create_aftersale_ticket",
     },
@@ -42,9 +41,9 @@ ROLE_PERMISSIONS: Dict[str, Set[str]] = {
 }
 
 # ====================== 数据脱敏配置 ======================
-# 消费者查询商品时需要隐藏的内部经营敏感字段
+# 买家查询商品时需要隐藏的内部经营敏感字段
 CONSUMER_MASKED_GOODS_FIELDS: Set[str] = {
-    "上架状态",  # 商品上下架状态属于内部运营管理数据，消费者无需感知
+    "上架状态",  # 商品上下架状态属于内部运营管理数据，买家无需感知
 }
 
 
@@ -92,7 +91,7 @@ def get_permission_denied_msg(func_name: str, role: str) -> str:
 def mask_goods_data(result: List[Dict], role: str) -> List[Dict]:
     """
     对 query_goods 的返回结果进行数据脱敏。
-    消费者角色隐藏内部经营敏感字段（如上架状态），商家角色不脱敏。
+    买家角色隐藏内部经营敏感字段（如上架状态），商家角色不脱敏。
     """
     if role != ROLE_CONSUMER:
         return result
@@ -122,12 +121,12 @@ def get_role_prompt_suffix(role: str) -> str:
     生成追加到系统提示词的角色信息，让 LLM 感知当前用户角色。
     """
     role_labels = {
-        ROLE_CONSUMER: "消费者（普通买家）",
+        ROLE_CONSUMER: "买家（普通买家）",
         ROLE_MERCHANT: "商家（店铺管理员）",
     }
     label = role_labels.get(role, role)
     allowed = ", ".join(sorted(get_allowed_tools(role)))
     return (
         f"\n5. 当前用户角色为【{label}】，你只能使用以下工具：{allowed}。"
-        f"消费者无法修改商品信息或查看销售报表，如用户提出此类需求请礼貌说明权限不足。"
+        f"买家无法查看库存、无法修改商品信息，也无法查看销售报表，如用户提出此类需求请礼貌说明权限不足。"
     )

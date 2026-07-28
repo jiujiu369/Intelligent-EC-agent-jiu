@@ -10,7 +10,7 @@ Python CLI 版电商客服智能助手。项目入口为 `agent/main_agent.py`�
 
 | 角色 | 说明 | 默认账号 |
 | --- | --- | --- |
-| consumer | 消费者，只能查询和创建售后 | `user1 / 123456` |
+| consumer | 买家，只能查询商品、订单、售后政策并创建售后 | `user1 / 123456` |
 | merchant | 商家，拥有商品管理和报表权限 | `admin / admin123` |
 
 账号文件：
@@ -26,14 +26,15 @@ Python CLI 版电商客服智能助手。项目入口为 `agent/main_agent.py`�
 
 | 角色 | 可用工具 |
 | --- | --- |
-| consumer | `rag_search`、`query_goods`、`query_stock`、`query_order`、`create_aftersale_ticket` |
-| merchant | consumer 全部工具 + `update_goods`、`export_sales_report` |
+| consumer | `rag_search`、`query_goods`、`query_order`、`create_aftersale_ticket` |
+| merchant | 买家全部工具 + `query_stock`、`update_goods`、`export_sales_report` |
 
 权限生效方式：
 
 - `get_filtered_schemas()` 按角色过滤传给 LLM 的 Function Schema。
 - `check_permission()` 在工具执行前二次校验。
-- `mask_tool_result()` 对消费者查询商品结果做脱敏，隐藏 `上架状态` 字段。
+- `mask_tool_result()` 对买家查询商品结果做脱敏，隐藏 `上架状态` 字段。
+- 买家不能查看库存，`query_stock` 只对商家开放。
 
 ### 3. 业务工具
 
@@ -42,7 +43,7 @@ Python CLI 版电商客服智能助手。项目入口为 `agent/main_agent.py`�
 | 工具 | 功能 |
 | --- | --- |
 | `query_goods` | 按商品 ID 精确查询，或按商品名称模糊查询 |
-| `query_stock` | 查询全部库存，或按商品 ID 查询库存 |
+| `query_stock` | 查询全部库存，或按商品 ID 查询库存，商家可用 |
 | `query_order` | 按订单号、商品 ID、下单时间范围查询订单 |
 | `create_aftersale_ticket` | 创建售后工单，缺少核心字段时拒绝创建 |
 | `update_goods` | 修改商品信息，支持售价/价格等字段别名 |
@@ -194,7 +195,7 @@ API 客户端位于 `utils/api_monitor.py`。
 CLI 用户可见内容示例：
 
 ```text
-[对话一|消费者] 请输入客服问题(输入【退出】结束程序)：
+[对话一|买家] 请输入客服问题(输入【退出】结束程序)：
 客服回答：...
 ```
 

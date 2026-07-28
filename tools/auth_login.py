@@ -109,13 +109,13 @@ def _constant_time_compare(a: str, b: str) -> bool:
 def init_auth_files() -> None:
     """
     自动初始化账号文件。
-    - consumer_users.json —— 预置测试消费者账号 user1/123456
+    - consumer_users.json —— 预置测试买家账号 user1/123456
     - merchant_users.json —— 预置测试商家账号 admin/admin123
     如果文件已存在则跳过，不会覆盖已有数据。
     """
     os.makedirs(DATA_DIR, exist_ok=True)
 
-    # -- 消费者文件 --
+    # -- 买家文件 --
     if not os.path.exists(CONSUMER_FILE):
         _init_with_preset(CONSUMER_FILE, _DEFAULT_CONSUMER, ROLE_CONSUMER)
     else:
@@ -293,7 +293,7 @@ def auth_interactive() -> Tuple[Optional[str], Optional[str]]:
     print("  电商客服 Agent — 登录")
     print("=" * 50)
     print("  请选择角色：")
-    print("    1. 消费者 (consumer)")
+    print("    1. 买家 (consumer)")
     print("    2. 商家 (merchant)")
     print("    0. 退出")
     print("-" * 50)
@@ -312,7 +312,7 @@ def auth_interactive() -> Tuple[Optional[str], Optional[str]]:
         print("  无效选项，请重新输入")
 
     # -- 登录 or 注册 --
-    role_label = "消费者" if role == ROLE_CONSUMER else "商家"
+    role_label = "买家" if role == ROLE_CONSUMER else "商家"
     print(f"\n  当前角色: [{role_label}]")
     print("    1. 登录")
     print("    2. 注册新账号")

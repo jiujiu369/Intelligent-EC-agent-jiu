@@ -60,7 +60,7 @@ def test_user_scoped_session_memory_isolated():
             user_path = main_agent.get_session_path("对话一", username="user1", role=ROLE_CONSUMER)
             admin_path = main_agent.get_session_path("对话一", username="admin", role=ROLE_MERCHANT)
 
-            _assert(user_memory[0]["content"] == "user1 的问题", "消费者读取自己的同名会话")
+            _assert(user_memory[0]["content"] == "user1 的问题", "买家读取自己的同名会话")
             _assert(admin_memory[0]["content"] == "admin 的问题", "商家读取自己的同名会话")
             _assert(user_path != admin_path, "不同用户同名会话保存到不同文件")
         finally:

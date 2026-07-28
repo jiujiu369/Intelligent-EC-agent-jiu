@@ -431,7 +431,7 @@ if __name__ == "__main__":
 
     current_role, current_username = result   # type: ignore[misc]
     current_session = DEFAULT_SESSION
-    role_label = "消费者" if current_role == ROLE_CONSUMER else "商家"
+    role_label = "买家" if current_role == ROLE_CONSUMER else "商家"
     print(f"当前角色：{role_label}  |  用户：{current_username}")
     print(f"当前对话会话：{current_session}")
     print_recent_chat_records(current_session, username=current_username, role=current_role)
@@ -442,7 +442,7 @@ if __name__ == "__main__":
 已有对话 或 历史对话：    查看已有会话列表
 新建对话 <名字>：         创建并切换到新会话（可省略空格）
 切换到 <对话名称>：       切换到已有会话（可省略空格）
-重新登录：                更换身份（消费者/商家），切换后清空上下文
+重新登录：                更换身份（买家/商家），切换后清空上下文
 清空当前记忆：            清空当前会话记忆
 清空所有对话记忆：        清空所有会话记忆
 帮助：                    显示命令帮助
@@ -452,7 +452,7 @@ if __name__ == "__main__":
 """
 
     while True:
-        role_label = "消费者" if current_role == ROLE_CONSUMER else "商家"
+        role_label = "买家" if current_role == ROLE_CONSUMER else "商家"
         question = input(f"\n[{current_session}|{role_label}] 请输入客服问题(输入【退出】结束程序)：")
         raw_input = question.strip()
 
@@ -510,7 +510,7 @@ if __name__ == "__main__":
             clear_memory(current_session, username=current_username, role=current_role)
             save_memory([], current_session, username=current_username, role=current_role)
             logger.info("重新登录后清空会话上下文", extra={"session_name": get_session_label(current_session, current_username, current_role)})
-            role_label = "消费者" if current_role == ROLE_CONSUMER else "商家"
+            role_label = "买家" if current_role == ROLE_CONSUMER else "商家"
             print(f"已切换身份，当前角色：{role_label}  |  用户：{current_username}，会话上下文已清空")
         # 清空当前会话记忆
         if raw_input == "清空当前记忆":
