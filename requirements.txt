@@ -1,10 +1,15 @@
+# 运行时核心依赖
+gradio==6.20.0
 chromadb
 sentence-transformers
 fastapi
 uvicorn
-gradio
 pydantic
 python-multipart
 PyPDF2
 python-docx
 jieba
+
+# 配置与 API 调用（云端必需）
+python-dotenv
+requests
