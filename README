@@ -1,3 +1,6 @@
+**由于该项目需要torch/sentence-transformers 框架需要1.5G内存和磁盘，而免费云端服务器大部分只有512MB，所有无法完成云端部署**
+**谁用教程详见725行**
+
 # 电商客服 Agent
 
 Python 版电商客服智能助手。CLI 入口为 `agent/main_agent.py`，Gradio UI 入口为 `web_ui.py`。项目通过 LLM Function Call 调用本地业务工具，支持登录认证、角色权限、商品/库存/订单/售后处理、RAG 知识库检索、会话记忆、统一配置、日志、限流缓存、异常兜底和规则型幻觉检测。
@@ -8,14 +11,17 @@ Python 版电商客服智能助手。CLI 入口为 `agent/main_agent.py`，Gradi
 
 支持两类用户：
 
-| 角色 | 说明 | 默认账号 |
-| --- | --- | --- |
-| consumer | 买家，只能查询商品、订单、售后政策并创建售后 | `user1 / 123456` |
-| merchant | 商家，拥有商品管理和报表权限 | `admin / admin123` |
+| 角色 | 说明 |
+| --- | --- |
+| 买家 | 买家，只能查询商品、订单、售后政策并创建售后 |
+| 商家 | 商家，拥有商品管理和报表权限 |
+
+> 注意：本项目不提供预设账号，首次使用请先注册（图形界面点「注册」，或命令行输入 注册）。
 
 账号文件：
 
 - `datas/consumer_users.json`
+
 - `datas/merchant_users.json`
 
 密码使用 PBKDF2-SHA256 加盐哈希保存，不保存明文密码。
@@ -25,15 +31,21 @@ Python 版电商客服智能助手。CLI 入口为 `agent/main_agent.py`，Gradi
 权限控制位于 `tools/rbac.py`。
 
 | 角色 | 可用工具 |
+
 | --- | --- |
-| consumer | `rag_search`、`query_goods`、`query_order`、`create_aftersale_ticket` |
-| merchant | 买家全部工具 + `query_stock`、`update_goods`、`export_sales_report` |
+
+| 买家 | `rag_search`、`query_goods`、`query_order`、`create_aftersale_ticket` |
+
+| 商家 | 买家全部工具 + `query_stock`、`update_goods`、`export_sales_report` |
 
 权限生效方式：
 
 - `get_filtered_schemas()` 按角色过滤传给 LLM 的 Function Schema。
+
 - `check_permission()` 在工具执行前二次校验。
+
 - `mask_tool_result()` 对买家查询商品结果做脱敏，隐藏 `上架状态` 字段。
+
 - 买家不能查看库存，`query_stock` 只对商家开放。
 
 ### 3. 业务工具
@@ -41,13 +53,21 @@ Python 版电商客服智能助手。CLI 入口为 `agent/main_agent.py`，Gradi
 业务工具位于 `tools/data_loader.py`，Schema 位于 `tools/schema.py`。
 
 | 工具 | 功能 |
+
 | --- | --- |
+
 | `query_goods` | 按商品 ID 精确查询，或按商品名称模糊查询 |
+
 | `query_stock` | 查询全部库存，或按商品 ID 查询库存，商家可用 |
+
 | `query_order` | 按订单号、商品 ID、下单时间范围查询订单 |
+
 | `create_aftersale_ticket` | 创建售后工单，缺少核心字段时拒绝创建 |
+
 | `update_goods` | 修改商品信息，支持售价/价格等字段别名 |
+
 | `export_sales_report` | 按时间范围统计订单数量和销售额 |
+
 | `get_all_orders` | 内部工具，供销售报表统计使用 |
 
 查无结果时返回友好提示：`未找到匹配信息`。
@@ -58,46 +78,70 @@ RAG 实现在 `embedding/rag_pipeline.py`。
 
 主向量库：
 
-- 模型：`F:\code\project1\models\bge-base-zh-v1.5`
+- 模型：`<项目根目录>/models\bge-base-zh-v1.5`
+
 - 维度：768
+
 - ChromaDB 路径：`datas/chroma_db`
+
 - Collection：`customer_service_docs`
 
 备用向量库：
 
-- 模型：`F:\code\project1\models\paraphrase-multilingual-MiniLM-L12-v2`
+- 模型：`<项目根目录>/models\paraphrase-multilingual-MiniLM-L12-v2`
+
 - 维度：384
+
 - ChromaDB 路径：`datas/chroma_db_384`
+
 - Collection：`customer_service_docs_384`
 
 RAG 参数：
 
 - `chunk_size = 384`
+
 - `chunk_overlap = 64`
+
 - `distance_threshold = 1.5`
 
 已实现函数：
 
 | 函数 | 说明 |
+
 | --- | --- |
+
 | `build_vector_db_docs()` | 构建主 768 维政策文档向量 |
+
 | `build_vector_db_goods()` | 构建主 768 维商品向量 |
+
 | `build_vector_db_docs_384()` | 构建备用 384 维政策文档向量 |
+
 | `build_vector_db_goods_384()` | 构建备用 384 维商品向量 |
+
 | `rag_search(query, top_k=5, doc_type=None)` | 知识库检索入口 |
+
 | `fallback_vector_search(query, top_k=5, doc_type=None)` | 384 维备用向量检索 |
+
 | `fallback_keyword_search(query, top_k=5)` | 关键词降级检索 |
+
 | `update_single_goods_vector(goods_id)` | 单商品向量更新 |
+
 | `rebuild_all_vectors()` | 全量重建 policy + goods 向量，异常时回滚 |
+
 | `clear_all_goods_vector()` | 清空商品向量 |
 
 检索规则：
 
 - 主 768 向量库优先。
+
 - 主库查询异常或结果为空时，自动尝试 384 维备用库。
+
 - 主库和 384 维备用库都连接失败时，直接返回降级话术：`暂未找到相关知识，建议联系人工客服`。
+
 - 向量库可用但检索结果为空或相似度过低时，会尝试关键词降级检索。
+
 - `distance > distance_threshold` 的结果会被过滤。
+
 - 短英文数字乱码，如 `xyz123xyz`，会在 RAG 入口被识别为无意义输入并返回空结果。
 
 ### 5. 会话管理
@@ -105,23 +149,37 @@ RAG 参数：
 会话逻辑位于 `agent/main_agent.py`。
 
 - 默认会话名来自 `config.py`：`对话一`
+
 - 会话文件保存在 `agent_memory/`
+
 - 多用户会话按 `role + username` 隔离，聊天记录不会串联
-- 打开或切换已有会话时输出最近 5 条聊天记录
+
+- CLI窗口打开或切换已有会话时输出最近 5 条聊天记录，ui界面则更多
+
 - 会话文件损坏时自动重建空文件
+
 - 单次会话超过 20 轮后，自动摘要压缩前 10 轮并注入 system prompt
 
 CLI 命令：
 
 | 命令 | 功能 |
+
 | --- | --- |
+
 | `帮助` / `菜单` | 显示命令菜单 |
+
 | `已有对话` / `历史对话` | 查看当前用户的会话列表 |
+
 | `新建对话 <名称>` | 创建并切换到新会话 |
+
 | `切换到 <名称>` | 切换已有会话，并输出最近 5 条记录 |
+
 | `重新登录` | 切换账号/角色，并清空当前上下文 |
+
 | `清空当前记忆` | 清空当前会话 |
+
 | `清空所有对话记忆` | 清空当前用户全部会话 |
+
 | `退出` | 退出程序 |
 
 ### 6. Gradio 图形界面
@@ -131,17 +189,26 @@ UI 入口位于 `web_ui.py`，复用现有登录、会话和 Agent 调用逻辑�
 界面区域：
 
 | 区域 | 功能 |
+
 | --- | --- |
+
 | 登录页 | 选择买家/商家，输入用户名和密码登录，支持注册新账号 |
-| 会话区 | 新建、切换、清空会话，并显示最近 5 条聊天记录 |
+![alt text](image-2.png)
+| 会话区 | 新建、切换、清空会话，并显示最近聊天记录 |
+![alt text](image-1.png)
 | 聊天区 | 发送客服问题，顶部固定提示输入 `帮助` / `菜单` |
-| 运维演示区 | 仅商家可见，可查看当前商家会话信息并一键运行全部测试 |
+
+| 运维演示区 | 仅商家可见，可查看当前agent的配置信息 |
+![alt text](image.png)
 
 权限规则：
 
 - 首屏仅显示登录页，登录成功后切换到聊天界面。
+
 - 买家登录后只能看到登录区、会话区和聊天区。
+
 - 商家登录后额外显示运维演示区。
+
 - 运维演示区后端仍会二次校验角色，买家无法通过函数直接执行运维测试。
 
 ### 7. 提示词管理
@@ -149,16 +216,23 @@ UI 入口位于 `web_ui.py`，复用现有登录、会话和 Agent 调用逻辑�
 提示词集中在 `tools/prompt_manager.py`。
 
 - `BASE_SYSTEM`
+
 - `ROLE_CONSUMER`
+
 - `ROLE_MERCHANT`
+
 - `TOOL_CONSTRAINTS`
+
 - `ANTI_HALLUCINATION`
+
 - `ERROR_FALLBACK`
 
 主要接口：
 
 - `build_system_prompt(role, session_context=None)`
+
 - `get_role_description(role)`
+
 - `get_error_message(error_type)`
 
 `main_agent.py` 不再硬编码系统提示词。
@@ -170,12 +244,19 @@ UI 入口位于 `web_ui.py`，复用现有登录、会话和 Agent 调用逻辑�
 覆盖场景：
 
 - 空白输入提示重新输入
+
 - 超长输入超过 500 字符时截断并提示
+
 - 连续相同字符占比过高、不可打印字符占比过高时拒绝处理
+
 - `你好`、`在吗`、`谢谢`、`再见` 等短闲聊引导到业务问题
+
 - 工具调用前检查 required 参数
+
 - 工具异常返回兜底话术，不退出程序
+
 - JSON 读写使用 `threading.Lock`
+
 - RAG 无结果返回：`暂未找到相关知识，建议联系人工客服`
 
 ### 9. LLM API 客户端
@@ -185,13 +266,21 @@ API 客户端位于 `utils/api_monitor.py`。
 能力：
 
 - 从 `config.py` 和环境变量读取 API 配置
+
 - 每次调用前接入 `@rate_limit`
+
 - 401：返回密钥失效提示
+
 - 402：返回余额不足提示
+
 - 429：按 `Retry-After` 等待后重试
+
 - 5xx：指数退避重试，间隔 1s/2s/4s
+
 - 网络超时单独捕获
+
 - 超过重试上限返回：`系统繁忙，请稍后再试`
+
 - DEBUG 日志记录 request/response 和 token 粗略估算
 
 ### 10. 日志系统
@@ -201,22 +290,31 @@ API 客户端位于 `utils/api_monitor.py`。
 日志格式：
 
 ```text
+
 [时间] [级别] [模块] [会话名] 内容
+
 ```
 
 输出策略：
 
 - 文件：DEBUG 及以上
+
 - 普通模块默认可输出 INFO 及以上到控制台
+
 - 交互式 CLI 启动后会关闭控制台日志，只向用户展示输入提示和客服回答
+
 - 按天保存：`logs/YYYY-MM-DD.log`
+
 - 自动保留最近 30 天
 
 CLI 用户可见内容示例：
 
 ```text
+
 [对话一|买家] 请输入客服问题(输入【退出】结束程序)：
+
 客服回答：...
+
 ```
 
 类似 `[2026-07-28 02:34:15] [WARNING] ... 输入被过滤 ...` 的日志不会显示给 CLI 用户，但仍会写入 `logs/YYYY-MM-DD.log` 便于排查。
@@ -224,12 +322,19 @@ CLI 用户可见内容示例：
 主要埋点：
 
 - 用户输入
+
 - LLM 调用前后
+
 - HTTP 请求耗时和重试
+
 - 工具调用前后
+
 - RAG 检索 query/top_k/数量/平均 distance
+
 - JSON 读写
+
 - 登录成功/失败
+
 - RBAC 越权拦截
 
 ### 11. 限流、缓存与去重
@@ -237,8 +342,11 @@ CLI 用户可见内容示例：
 实现位于 `utils/rate_limiter.py`。
 
 - API 限流：每分钟最多 30 次调用
+
 - `query_goods` 结果缓存：TTL 5 分钟
+
 - `rag_search` 结果缓存：TTL 10 分钟
+
 - 5 秒内同一会话相同 query 直接返回缓存答案，不重复调用 LLM
 
 ### 12. 幻觉检测
@@ -248,11 +356,17 @@ CLI 用户可见内容示例：
 特点：
 
 - 不额外调用 LLM
+
 - 从回答中提取商品名、订单号、金额
+
 - 与工具返回数据比对
+
 - 检测 `绝对`、`肯定`、`保证`、`100%` 等过度承诺词
+
 - 输出 `0~1` 风险分
+
 - `score > 0.3` 视为有幻觉风险
+
 - 统计会话内幻觉风险占比
 
 ## 配置说明
@@ -262,43 +376,65 @@ CLI 用户可见内容示例：
 配置分组：
 
 | 分组 | 内容 |
+
 | --- | --- |
+
 | `API` | `api_key`、`base_url`、`model_name`、`timeout`、`max_retry`、`temperature` |
+
 | `PATHS` | 数据目录、文档目录、ChromaDB 目录、日志目录、用户和业务 JSON 路径 |
+
 | `RAG` | 主 embedding 模型、备用 embedding 模型、chunk 参数、距离阈值 |
+
 | `SESSION` | 默认会话名、最大消息轮数、摘要保留轮数 |
+
 | `AGENT` | 最大 LLM 工具循环次数、LLM temperature |
 
 代码读取方式：
 
 ```python
+
 import config
 
+
+
 api_key = config.get("API", "api_key")
+
 ```
 
 环境变量覆盖规则：
 
 - `AGENT_API_KEY` 覆盖 `API.api_key`
+
 - `AGENT_BASE_URL` 覆盖 `API.base_url`
+
 - `AGENT_MODEL_NAME` 覆盖 `API.model_name`
+
 - `AGENT_RAG_DISTANCE_THRESHOLD` 覆盖 `RAG.distance_threshold`
+
 - `AGENT_RAG_FALLBACK_MODEL` 覆盖 `RAG.fallback_model`
 
 PowerShell 示例：
 
 ```powershell
+
 $env:AGENT_API_KEY="你的 API Key"
+
 $env:AGENT_BASE_URL="https://apihub.agnes-ai.com/v1"
+
 $env:AGENT_MODEL_NAME="agnes-2.0-flash"
+
 ```
 
 永久写入当前 Windows 用户环境变量：
 
 ```powershell
+
 setx AGENT_API_KEY "你的 API Key"
+
 setx AGENT_BASE_URL "https://apihub.agnes-ai.com/v1"
+
 setx AGENT_MODEL_NAME "agnes-2.0-flash"
+
 ```
 
 设置后需要重新打开终端。
@@ -308,38 +444,51 @@ setx AGENT_MODEL_NAME "agnes-2.0-flash"
 进入项目目录：
 
 ```powershell
-cd F:\code\project1
+
+cd <项目根目录>
+
 ```
 
 安装依赖：
 
 ```powershell
+
 pip install -r requirements.txt
+
 ```
 
 启动 CLI：
 
 ```powershell
+
 python agent\main_agent.py
+
 ```
 
 启动 Gradio UI：
 
 ```powershell
+
 python web_ui.py
+
 ```
 
 默认访问地址：
 
 ```text
+
 http://127.0.0.1:7860
+
 ```
 
 如需换端口：
 
 ```powershell
+
 $env:GRADIO_SERVER_PORT="7861"
+
 python web_ui.py
+
 ```
 
 ## 模型与向量库维护
@@ -347,48 +496,67 @@ python web_ui.py
 当前推荐本地模型目录：
 
 ```text
+
 models/
+
 ├─ bge-base-zh-v1.5/
+
 └─ paraphrase-multilingual-MiniLM-L12-v2/
+
 ```
 
 主模型 768 维和备用模型 384 维不能写入同一个 ChromaDB，因此项目使用两个独立向量库：
 
 ```text
+
 datas/chroma_db
+
 datas/chroma_db_384
+
 ```
 
 构建主 768 维向量库：
 
 ```powershell
+
 python embedding\rag_pipeline.py
+
 ```
 
 构建备用 384 维向量库：
 
 ```powershell
+
 python -c "from embedding.rag_pipeline import build_vector_db_docs_384, build_vector_db_goods_384; print(build_vector_db_docs_384()); print(build_vector_db_goods_384())"
+
 ```
 
 验证 384 模型维度：
 
 ```powershell
-python -c "from sentence_transformers import SentenceTransformer; m=SentenceTransformer(r'F:\code\project1\models\paraphrase-multilingual-MiniLM-L12-v2'); print(len(m.encode(['测试'])[0]))"
+
+python -c "from sentence_transformers import SentenceTransformer; m=SentenceTransformer(r'<项目根目录>/models\paraphrase-multilingual-MiniLM-L12-v2'); print(len(m.encode(['测试'])[0]))"
+
 ```
 
 如果 HuggingFace 下载慢，可使用镜像：
 
 ```powershell
+
 $env:HF_ENDPOINT="https://hf-mirror.com"
-python -c "from huggingface_hub import snapshot_download; snapshot_download(repo_id='sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2', local_dir=r'F:\code\project1\models\paraphrase-multilingual-MiniLM-L12-v2')"
+
+python -c "from huggingface_hub import snapshot_download; snapshot_download(repo_id='sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2', local_dir=r'<项目根目录>/models\paraphrase-multilingual-MiniLM-L12-v2')"
+
 ```
 
 如本机使用代理，可临时指定：
 
 ```powershell
+
 $env:HTTPS_PROXY="http://127.0.0.1:7897"
+
 $env:HTTP_PROXY="http://127.0.0.1:7897"
+
 ```
 
 ## 测试说明
@@ -396,199 +564,303 @@ $env:HTTP_PROXY="http://127.0.0.1:7897"
 一键运行全部测试：
 
 ```powershell
+
 python run_all_test.py
+
 ```
 
 测试文件位于 `test/`，每个脚本都可独立运行。
 
 | 测试文件 | 验证内容 |
+
 | --- | --- |
+
 | `test_auth.py` | 登录、注册、密码哈希、用户文件初始化、RBAC 集成 |
+
 | `test_rbac.py` | 权限白名单、Schema 过滤、越权拦截、商品脱敏、角色提示词 |
+
 | `test_business_tools.py` | 商品、库存、订单、售后、商品更新、销售报表 |
+
 | `test_rag.py` | Chroma 连接、商品检索、政策检索、低相似度过滤、top_k |
+
 | `test_edge_cases.py` | 会话损坏恢复、并发 JSON 写入、超长输入、API 超时、角色切换 |
+
 | `test_config.py` | 配置默认值和环境变量覆盖 |
+
 | `test_error_handler.py` | 输入校验、工具参数校验、RAG 兜底、会话摘要、文件锁 |
+
 | `test_api_monitor.py` | HTTP 状态码处理、超时、重试、降级 |
+
 | `test_logger.py` | 日志格式、文件输出、30 天清理、CLI 控制台日志关闭 |
+
 | `test_logging_integration.py` | 登录、RBAC、data_loader 日志埋点 |
+
 | `test_prompt_manager.py` | 提示词模板、动态拼接、Agent 集成 |
+
 | `test_rate_limiter.py` | API 限流、TTL 缓存、重复提问去重 |
+
 | `test_hallucination_checker.py` | 商品名、订单号、金额、承诺词检测和风险统计 |
+
 | `test_agent_error_integration.py` | Agent 输入过滤、工具参数校验、异常兜底集成 |
+
 | `test_agent_rate_limiter_integration.py` | Agent 重复提问缓存，不重复调用 LLM |
+
 | `test_context_window.py` | 打开/切换会话展示最近 5 条，多用户会话隔离 |
+
 | `test_gradio_ui.py` | Gradio UI 登录页切换、注册校验、默认账号登录、权限显示、聊天区帮助/菜单提示 |
+
 | `test_rag_pipeline_fallback.py` | Chroma 异常时 RAG 降级 |
+
 | `test_rag_vector_maintenance.py` | 向量去重、单商品更新、全量重建、关键词降级 |
+
 | `test_run_all_test.py` | 批量测试脚本自身的发现、执行、统计 |
 
 常用单测命令：
 
 ```powershell
+
 python test\test_auth.py
+
 python test\test_business_tools.py
+
 python test\test_rag.py
+
 python test\test_edge_cases.py
+
 ```
 
 编译检查：
 
 ```powershell
+
 python -m py_compile config.py agent\main_agent.py embedding\rag_pipeline.py tools\data_loader.py tools\schema.py
+
 ```
 
 ## 目录结构
 
 ```text
+
 project1/
+
 ├─ agent/
+
 │  └─ main_agent.py
+
 ├─ embedding/
+
 │  └─ rag_pipeline.py
+
 ├─ tools/
+
 │  ├─ auth_login.py
+
 │  ├─ data_loader.py
+
 │  ├─ error_handler.py
+
 │  ├─ hallucination_checker.py
+
 │  ├─ prompt_manager.py
+
 │  ├─ rbac.py
+
 │  └─ schema.py
+
 ├─ utils/
+
 │  ├─ api_monitor.py
+
 │  ├─ logger.py
+
 │  └─ rate_limiter.py
+
 ├─ web_ui.py
+
 ├─ app.py
+
 ├─ datas/
+
 │  ├─ docs/
+
 │  ├─ chroma_db/
+
 │  ├─ chroma_db_384/
+
 │  ├─ consumer_users.json
+
 │  ├─ merchant_users.json
+
 │  ├─ 货品基础数据.json
+
 │  ├─ 库存数据.json
+
 │  ├─ 订单数据.json
+
 │  └─ 售后工单.json
+
 ├─ models/
+
 │  ├─ bge-base-zh-v1.5/
+
 │  └─ paraphrase-multilingual-MiniLM-L12-v2/
+
 ├─ agent_memory/
+
 ├─ logs/
+
 ├─ test/
+
 │  └─ test_*.py
+
 ├─ config.py
+
 ├─ run_all_test.py
+
 ├─ requirements.txt
+
 └─ README
+
 ```
 
-## 常见问题
+# 使用教程（快速开始）
 
-### API 密钥读取失败
+本教程面向**从 GitHub 克隆本项目后、第一次在本地运行**的用户。跟着做即可跑起来。
 
-确认当前终端里存在环境变量：
+## 一、环境要求
 
-```powershell
-echo $env:AGENT_API_KEY
+- **Python 3.10 ~ 3.12**（推荐 3.11或3.16；不建议 3.14，部分依赖兼容性差）
+
+- **能联网**：首次运行需从 HuggingFace 下载 embedding 模型（约 800MB），耗时 1~2 分钟
+
+- Windows / macOS / Linux 均可
+
+## 二、获取代码
+
+```bash
+
+git clone https://github.com/jiujiu369/project1.git
+
+cd project1
+
 ```
 
-如果为空，设置后重新打开终端：
+## 三、安装依赖
 
-```powershell
-setx AGENT_API_KEY "你的 API Key"
-```
+```bash
 
-### jieba 无法解析导入
-
-安装依赖：
-
-```powershell
-pip install jieba
-```
-
-或一次性安装全部依赖：
-
-```powershell
 pip install -r requirements.txt
+
 ```
 
-### 乱码输入仍返回商品
+这一步会安装全部所需第三方库（gradio、torch、sentence-transformers、chromadb、requests、python-dotenv 等）。**注意：pip install 只装代码库，不会下载模型权重，也不会包含你的 API Key**（见第四、五步）。
 
-当前 `rag_search()` 已在入口拦截短英文数字乱码，例如 `xyz123xyz` 会直接返回空列表。正常商品 ID 如 `SP014` 不会被拦截。
+## 四、配置 API Key（必须）
 
-### 768 维和 384 维模型能否共用向量库
-
-不能。不同维度 embedding 不能写入同一个 Chroma collection。本项目已经分离为：
-
-- 768 维：`datas/chroma_db`
-- 384 维：`datas/chroma_db_384`
-
-## 云端部署（Oracle Cloud Always Free VM）
-
-免费、全功能、域名长期有效。Oracle Always Free 提供 4 OCPU / 24GB 内存 / 200GB 磁盘的 ARM 实例，足以完整运行本地 embedding 模型（约 1.5GB 内存 + 磁盘占用），而普通免费平台的 512MB~1GB 内存/磁盘装不下。
-
-### 准备工作
-
-1. 注册 Oracle Cloud 账号（需信用卡验证，Always Free 资源本身不收费）。
-2. 创建 Always Free 实例：
-   - 镜像：**Ubuntu 22.04 / 24.04**
-   - Shape：**VM.Standard.A1.Flex**（4 OCPU / 24GB 内存，Always Free 额度内）
-   - 网络：创建新的 VCN（会自动带安全列表）
-   - 添加你的 **SSH 公钥**（用于登录）
-3. 记录实例的**公网 IP**。
-
-### 一键部署
-
-SSH 登录实例后，执行：
+本项目通过 LLM API 提供智能回答，需要**你自己**的 API Key。在项目根目录新建 .env 文件，填入：
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/jiujiu369/project1/main/deploy/setup-oracle.sh)
+
+AGENT_API_KEY=你的APIKey
+
+AGENT_BASE_URL=https://apihub.agnes-ai.com/v1
+
+AGENT_MODEL_NAME=agnes-2.0-flash
+
 ```
 
-脚本会自动完成：
+- 把 你的APIKey 换成你自己的密钥；
 
-1. 安装 Docker 与基础工具；
-2. 克隆本仓库到 `~/project1`；
-3. 提示输入 `AGENT_API_KEY` 并写入 `.env`；
-4. 防火墙放行 `7860` 端口；
-5. （可选）配置 DuckDNS 持久域名；
-6. `docker compose up -d --build` 启动服务（首次会下载两个 embedding 模型，约 1~2 分钟）。
+- `base_url` 和 model_name 按你实际使用的服务商填写（上面是示例值）；
 
-> ⚠️ 脚本第 4 步只开放了实例内部防火墙，**还需在 Oracle 控制台手动开放 7860**：
-> 网络 → 虚拟云网络 → 安全列表 → 入站规则 → 添加规则：
-> 来源 `0.0.0.0/0`，协议 TCP，目标端口 `7860`。
+- 如果你不想建文件，也可以在启动前用环境变量临时设置（见下文「配置说明」章节）。
 
-### 访问地址
 
-- 本机：`http://localhost:7860`
-- 外网：`http://<公网IP>:7860`
-- 域名（若配置 DuckDNS）：`http://<子域名>.duckdns.org:7860`
 
-### 运维命令
+## 五、构建向量库（首次，会自动下载模型）
 
 ```bash
-cd ~/project1
-sudo docker compose logs -f                                   # 查看日志
-sudo docker compose restart                                   # 重启
-sudo docker compose pull && sudo docker compose up -d --build # 代码更新后重新部署
+
+python embedding/rag_pipeline.py
+
 ```
 
-### 部署文件说明
+- 首次运行会**自动从 HuggingFace 下载 768 维主 embedding 模型**（bge-base-zh-v1.5，约 400MB+），需联网，缓存到 `models/` 后下次不再下载；
 
-| 文件 | 作用 |
-| --- | --- |
-| `Dockerfile` | 构建生产镜像（含依赖安装、模型运行时从 HuggingFace 下载） |
-| `docker-compose.yml` | 容器编排，挂载数据卷持久化向量库与模型缓存 |
-| `deploy/setup-oracle.sh` | 一键部署脚本 |
-| `deploy/.env.template` | `.env` 模板，填入 API Key 即可 |
+- 脚本会自动构建**主向量库**（ChromaDB，存到 `datas/chroma_db`）；
 
-### 持久域名（可选）
+- 如需 384 维**备用降级库**（主库异常时自动降级，推荐一并构建），请见下文「模型与向量库维护」章节；
+- 这一步只需做一次，之后启动应用会直接复用已构建的向量库。
 
-Oracle 公网 IP 在实例生命周期内保持不变。若想要易记的域名：
+如果 HuggingFace 下载慢，可先设置镜像再运行：
 
-1. 注册 [DuckDNS](https://www.duckdns.org)（免费），添加一个子域名，获取 Token；
-2. 运行部署脚本时按提示填入子域名与 Token，脚本会自动配置每 5 分钟更新 IP 的定时任务。
+```bash
 
-完成后即可通过 `http://<子域名>.duckdns.org:7860` 长期访问。
+export HF_ENDPOINT=https://hf-mirror.com    # Linux / macOS
+
+# Windows PowerShell:  ="https://hf-mirror.com"
+
+```
+
+## 六、启动方式
+
+### 方式 A：图形界面（推荐）
+
+```bash
+
+python web_ui.py
+
+```
+
+启动后浏览器打开：**http://localhost:7860**
+
+### 方式 B：命令行界面
+
+```bash
+
+python agent/main_agent.py
+
+```
+
+## 七、首次使用（请先注册账号）
+
+可以查找project1/agent_memory文件夹，里面有本人测试的历史记录，可以删除
+为保证安全，本项目**不提供任何预设账号**，首次使用必须自己注册：
+
+- **图形界面**：登录页点击「注册」，填写用户名和密码即可；
+
+- **命令行**：直接输入 注册，按提示操作。
+
+注册成功后用该账号登录即可使用。
+
+## 八、基本使用
+
+- **图形界面**：左侧聊天框输入问题，回车发送；右侧可新建 / 切换 / 清空会话；聊天区顶部固定提示输入 帮助 / 菜单。
+
+- **命令行**：输入 帮助 查看全部会话管理命令，输入 菜单 查看可执行指令。
+
+- 买家可查商品、订单、售后政策并创建售后；商家额外拥有库存查询、商品管理和销售报表权限。
+
+## 九、常见问题
+
+**Q1：启动后提示「未检测到 API 密钥」？**
+
+确认项目根目录 .env 已创建且包含 AGENT_API_KEY=...，或已设置同名环境变量。没有 Key 时 LLM 无法调用，应用只能返回兜底话术。
+
+**Q2：第一次启动特别慢 / 卡住？**
+
+正在下载 embedding 模型（约 800MB），属正常现象，请耐心等待；可设 HF_ENDPOINT 镜像加速（见第五步）。
+
+**Q3：模型下载失败？**
+
+检查网络或代理设置；也可手动把模型下载到 models/ 目录（详见下方「模型与向量库维护」章节）。
+
+**Q4：RAG 回答「暂未找到相关知识」？**
+
+通常是向量库还没构建。请先执行第五步 python embedding/rag_pipeline.py。
+
+**Q5：换端口？**
+
+图形界面可在启动前设置环境变量 GRADIO_SERVER_PORT=7861 再运行 python web_ui.py。
+
+---

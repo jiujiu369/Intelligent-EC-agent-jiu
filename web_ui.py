@@ -31,6 +31,7 @@ from tools.auth_login import (
     ROLE_MERCHANT,
 )
 from utils.logger import get_logger, set_console_logging_enabled
+from embedding import rag_pipeline
 
 HELP_TEXT = """已有对话 或 历史对话：    查看已有会话列表
 新建对话 <名字>：         创建并切换到新会话（可省略空格）
@@ -56,6 +57,59 @@ $env:AGENT_API_KEY="sk-..."
 set_console_logging_enabled(False)
 logger = get_logger(__name__)
 init_auth_files()
+
+
+# ====================== 运维演示 ======================
+
+def refresh_ops_panel(state):
+    """刷新运维演示面板：ChromaDB 状态、API 配置、RAG 参数。仅商家可查看。"""
+    import config
+    if not state or not state.get("username") or state.get("role") != ROLE_MERCHANT:
+        return "仅商家角色可查看运维面板"
+
+    lines = []
+    primary_ok = not rag_pipeline.chroma_connection_failed and rag_pipeline.collection is not None
+    fallback_ok = not rag_pipeline.fallback_chroma_connection_failed and rag_pipeline.fallback_collection is not None
+
+    lines.append("### 📊 向量库状态")
+    lines.append(f"- **主库 (768维)**: {'✅ 正常' if primary_ok else '❌ 不可用'}")
+    lines.append(f"- **备用库 (384维)**: {'✅ 正常' if fallback_ok else '❌ 不可用'}")
+
+    if primary_ok:
+        try:
+            count = rag_pipeline.collection.count()
+            lines.append(f"  - 主库向量数: {count}")
+        except Exception:
+            pass
+    if fallback_ok:
+        try:
+            count = rag_pipeline.fallback_collection.count()
+            lines.append(f"  - 备用库向量数: {count}")
+        except Exception:
+            pass
+
+    api_key = config.get("API", "api_key")
+    lines.append("")
+    lines.append("### 🔧 API 配置")
+    lines.append(f"- 模型: `{config.get('API', 'model_name')}`")
+    lines.append(f"- 地址: `{config.get('API', 'base_url')}`")
+    lines.append(f"- 超时: {config.get('API', 'timeout')}s")
+    lines.append(f"- API Key: {'✅ 已配置' if api_key and api_key.strip() not in ('', 'your_api_key_here') else '⚠️ 未配置'}")
+
+    lines.append("")
+    lines.append("### 🚦 速率限制")
+    lines.append("- API 调用: 30 次 / 60 秒")
+    lines.append("- 登录尝试: 10 次 / 60 秒")
+
+    lines.append("")
+    lines.append("### 📚 RAG 参数")
+    lines.append(f"- 分块大小: {config.get('RAG', 'chunk_size')}")
+    lines.append(f"- 重叠: {config.get('RAG', 'chunk_overlap')}")
+    lines.append(f"- 距离阈值: {config.get('RAG', 'distance_threshold')}")
+    lines.append("- 主模型: bge-base-zh-v1.5 (768 维)")
+    lines.append("- 备用模型: paraphrase-multilingual-MiniLM-L12-v2 (384 维)")
+
+    return "\n".join(lines)
 
 
 # ====================== 辅助函数 ======================
@@ -89,6 +143,7 @@ def do_login(role_radio, username, password):
         return (
             gr.update(visible=True), gr.update(visible=False),
             msg, {}, [], gr.update(choices=[], value=None), "未登录", "", "",
+            gr.update(visible=False),
         )
     state = {"role": r, "username": username, "session": DEFAULT_SESSION}
     sessions = list_sessions(username, r)
@@ -104,6 +159,7 @@ def do_login(role_radio, username, password):
         f"✅ {msg}", state, history,
         gr.update(choices=sessions, value=DEFAULT_SESSION),
         _status_text(state), warn, "",
+        gr.update(visible=(r == ROLE_MERCHANT)),
     )
 
 
@@ -196,6 +252,7 @@ def relogin():
     return (
         gr.update(visible=True), gr.update(visible=False),
         "", {}, [], gr.update(choices=[], value=None), "未登录", "", "",
+        gr.update(visible=False),
     )
 
 
@@ -233,7 +290,7 @@ with gr.Blocks(title="电商客服 Agent") as demo:
                 login_btn = gr.Button("登录", variant="primary")
                 register_btn = gr.Button("注册")
             login_status = gr.Markdown("")
-            gr.Markdown("<small>首次使用请先注册账号</small>")
+            gr.Markdown("<small>请输入用户名和密码</small>")
 
     # ===== 主界面视图 =====
     with gr.Row(visible=False) as main_view:
@@ -263,11 +320,17 @@ with gr.Blocks(title="电商客服 Agent") as demo:
             clear_cur_btn = gr.Button("清空当前记忆")
             clear_all_btn = gr.Button("清空所有记忆", variant="stop")
             relogin_btn = gr.Button("重新登录")
+            gr.Markdown("---")
+            ops_accordion = gr.Accordion("🔧 运维演示", visible=False, open=False)
+            with ops_accordion:
+                ops_content = gr.Markdown("点击刷新加载系统状态")
+                ops_refresh_btn = gr.Button("刷新状态", size="sm")
 
     # ===== 事件绑定 =====
     login_outputs = [
         login_view, main_view, login_status, state,
         chatbot, session_dropdown, status_bar, api_key_warn, password_box,
+        ops_accordion,
     ]
     login_btn.click(do_login, [role_radio, username_box, password_box], login_outputs)
     register_btn.click(do_register, [role_radio, username_box, password_box], [login_status])
@@ -281,6 +344,8 @@ with gr.Blocks(title="电商客服 Agent") as demo:
     clear_cur_btn.click(clear_current, [state], [chatbot, status_bar, state])
     clear_all_btn.click(clear_all_sessions, [state], [chatbot, status_bar, state, session_dropdown])
     relogin_btn.click(relogin, outputs=login_outputs)
+
+    ops_refresh_btn.click(refresh_ops_panel, [state], [ops_content])
 
 
 if __name__ == "__main__":
