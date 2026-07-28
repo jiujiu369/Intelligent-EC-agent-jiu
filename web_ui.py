@@ -2,7 +2,18 @@
 # 电商客服 Agent — Gradio Web UI 入口
 # 复用 CLI 全部业务逻辑（run_agent / login_user / 会话管理），仅做界面层封装
 # 启动：python web_ui.py  →  浏览器访问 http://localhost:7860
+#重启
+"""
+找到占用 7860 的进程
+netstat -ano | findstr :7860
 
+用显示的 PID 杀掉它（把 <PID> 换成实际数字）
+taskkill /PID <PID> /F
+
+再重新启动
+python web_ui.py
+
+"""
 import os
 import sys
 

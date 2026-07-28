@@ -1,6 +1,3 @@
-**由于该项目需要torch/sentence-transformers 框架需要1.5G内存和磁盘，而免费云端服务器大部分只有512MB，所有无法完成云端部署**
-**谁用教程详见725行**
-
 # 电商客服 Agent
 
 Python 版电商客服智能助手。CLI 入口为 `agent/main_agent.py`，Gradio UI 入口为 `web_ui.py`。项目通过 LLM Function Call 调用本地业务工具，支持登录认证、角色权限、商品/库存/订单/售后处理、RAG 知识库检索、会话记忆、统一配置、日志、限流缓存、异常兜底和规则型幻觉检测。
@@ -676,8 +673,6 @@ project1/
 │  └─ rate_limiter.py
 
 ├─ web_ui.py
-
-├─ app.py
 
 ├─ datas/
 
