@@ -20,6 +20,11 @@ from tools.prompt_manager import (
 
 
 def _assert(condition, label):
+    """记录测试断言结果，并输出对应的通过或失败信息。
+    :param condition: 断言是否成立的布尔条件。
+    :param label: 用于日志或测试输出的说明标签。
+    :return: 返回函数处理得到的结果。
+    """
     if condition:
         print(f"  [PASS] {label}")
         return 0
@@ -71,9 +76,17 @@ import agent.main_agent as main_agent
 
 class FakeLLM:
     def __init__(self):
+        """初始化对象所需的状态和依赖。"""
         self.messages = None
 
     def chat_completion(self, messages, tools=None, temperature=0.1, session_name="-"):
+        """调用大模型聊天接口，并记录请求指标与重试信息。
+        :param messages: 传入 ``messages`` 的业务数据。
+        :param tools: 传入 ``tools`` 的业务数据。
+        :param temperature: 传入 ``temperature`` 的业务数据。
+        :param session_name: 用于隔离上下文的会话名称。
+        :return: 返回函数处理得到的结果。
+        """
         self.messages = messages
         return {"choices": [{"message": {"role": "assistant", "content": "ok"}}]}
 

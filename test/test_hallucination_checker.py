@@ -8,6 +8,11 @@ import importlib
 
 
 def _assert(condition, label):
+    """记录测试断言结果，并输出对应的通过或失败信息。
+    :param condition: 断言是否成立的布尔条件。
+    :param label: 用于日志或测试输出的说明标签。
+    :return: 返回函数处理得到的结果。
+    """
     if condition:
         print(f"  [PASS] {label}")
         return 0

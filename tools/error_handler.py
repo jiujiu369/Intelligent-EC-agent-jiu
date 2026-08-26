@@ -46,6 +46,10 @@ class InputValidationResult:
 
 
 def validate_user_input(raw_input: str) -> InputValidationResult:
+    """清洗并限制用户输入，拒绝无意义或异常文本。
+    :param raw_input: 尚未解析的用户原始输入。
+    :return: 返回函数处理得到的结果。
+    """
     text = "" if raw_input is None else str(raw_input)
     stripped = text.strip()
     if not stripped:
@@ -65,6 +69,10 @@ def validate_user_input(raw_input: str) -> InputValidationResult:
 
 
 def _unprintable_ratio(text: str) -> float:
+    """计算文本中不可打印字符所占比例。
+    :param text: 需要处理、检索或格式化的文本。
+    :return: 返回函数处理得到的结果。
+    """
     if not text:
         return 0.0
     unprintable_count = sum(1 for ch in text if not ch.isprintable() and ch not in "\r\n\t")
@@ -72,6 +80,10 @@ def _unprintable_ratio(text: str) -> float:
 
 
 def _max_same_char_run_ratio(text: str) -> float:
+    """计算文本中最长连续相同字符所占比例。
+    :param text: 需要处理、检索或格式化的文本。
+    :return: 返回函数处理得到的结果。
+    """
     if not text:
         return 0.0
     max_run = 1
@@ -89,6 +101,12 @@ def _max_same_char_run_ratio(text: str) -> float:
 
 
 def validate_tool_args(tool_name: str, func_args: Dict[str, Any], tool_schemas: List[Dict]) -> Dict[str, Any]:
+    """按照工具结构定义校验必填调用参数。
+    :param tool_name: 传入 ``tool_name`` 的业务数据。
+    :param func_args: 传入 ``func_args`` 的业务数据。
+    :param tool_schemas: 传入 ``tool_schemas`` 的业务数据。
+    :return: 返回函数处理得到的结果。
+    """
     required = _get_required_args(tool_name, tool_schemas)
     missing = [name for name in required if _is_missing(func_args.get(name))]
     if missing:
@@ -100,6 +118,11 @@ def validate_tool_args(tool_name: str, func_args: Dict[str, Any], tool_schemas: 
 
 
 def _get_required_args(tool_name: str, tool_schemas: List[Dict]) -> List[str]:
+    """从工具结构定义中提取必填参数名称。
+    :param tool_name: 传入 ``tool_name`` 的业务数据。
+    :param tool_schemas: 传入 ``tool_schemas`` 的业务数据。
+    :return: 返回完成读取、构建或转换后的结果。
+    """
     for schema in tool_schemas:
         func_info = schema.get("function", {})
         if func_info.get("name") == tool_name:
@@ -109,6 +132,10 @@ def _get_required_args(tool_name: str, tool_schemas: List[Dict]) -> List[str]:
 
 
 def _is_missing(value: Any) -> bool:
+    """判断工具参数是否属于缺失或空值。
+    :param value: 需要转换、缓存或检查的值。
+    :return: 条件成立时返回 ``True``，否则返回 ``False``。
+    """
     if value is None:
         return True
     if isinstance(value, str) and not value.strip():
@@ -119,14 +146,28 @@ def _is_missing(value: Any) -> bool:
 
 
 def wrap_tool_result(tool_name: str, result: Any) -> Any:
+    """将工具返回值转换为统一的成功结果结构。
+    :param tool_name: 传入 ``tool_name`` 的业务数据。
+    :param result: 工具调用或业务处理结果。
+    :return: 返回函数处理得到的结果。
+    """
     if tool_name in {"query_goods", "query_order", "query_stock"} and result == []:
         return {"status": "fail", "msg": NOT_FOUND_MESSAGE}
     return result
 
 
 def safe_tool_call(func: Callable[..., Any]) -> Callable[..., Any]:
+    """安全调用业务工具，并将异常包装为统一结果。
+    :param func: 需要调用或装饰的函数。
+    :return: 返回函数处理得到的结果。
+    """
     @functools.wraps(func)
     def wrapper(*args, **kwargs):
+        """执行 ``wrapper`` 对应的项目处理逻辑。
+        :param args: 传递给被包装函数的位置参数。
+        :param kwargs: 传递给被包装函数的关键字参数。
+        :return: 返回函数处理得到的结果。
+        """
         try:
             return func(*args, **kwargs)
         except Exception:
@@ -136,6 +177,11 @@ def safe_tool_call(func: Callable[..., Any]) -> Callable[..., Any]:
 
 
 def filter_rag_results(results: List[Dict], distance_threshold: float) -> List[Dict]:
+    """过滤低相似度或内容为空的 RAG 检索结果。
+    :param results: 传入 ``results`` 的业务数据。
+    :param distance_threshold: 传入 ``distance_threshold`` 的业务数据。
+    :return: 返回函数处理得到的结果。
+    """
     filtered = []
     for item in results or []:
         distance = item.get("distance")
@@ -147,10 +193,17 @@ def filter_rag_results(results: List[Dict], distance_threshold: float) -> List[D
 
 
 def rag_fallback_result() -> List[Dict]:
+    """生成知识库无有效命中时的标准兜底结果。
+    :return: 返回函数处理得到的结果。
+    """
     return [{"text": RAG_FALLBACK_MESSAGE, "meta": {"fallback": True}, "distance": None}]
 
 
 def llm_fallback_response(message: str = BUSY_MESSAGE) -> Dict:
+    """执行 ``llm_fallback_response`` 对应的项目处理逻辑。
+    :param message: 用户输入或待处理的消息文本。
+    :return: 返回函数处理得到的结果。
+    """
     return {
         "choices": [
             {
@@ -164,8 +217,17 @@ def llm_fallback_response(message: str = BUSY_MESSAGE) -> Dict:
 
 
 def safe_rag_call(func: Callable[..., List[Dict]]) -> Callable[..., List[Dict]]:
+    """为 RAG 函数添加异常捕获和标准兜底结果。
+    :param func: 需要调用或装饰的函数。
+    :return: 返回函数处理得到的结果。
+    """
     @functools.wraps(func)
     def wrapper(*args, **kwargs):
+        """执行 ``wrapper`` 对应的项目处理逻辑。
+        :param args: 传递给被包装函数的位置参数。
+        :param kwargs: 传递给被包装函数的关键字参数。
+        :return: 返回函数处理得到的结果。
+        """
         try:
             return func(*args, **kwargs)
         except Exception:
@@ -175,6 +237,10 @@ def safe_rag_call(func: Callable[..., List[Dict]]) -> Callable[..., List[Dict]]:
 
 
 def atomic_load_json(file_path: str) -> List[Dict]:
+    """在线程安全保护下读取 JSON 文件。
+    :param file_path: 目标文件路径。
+    :return: 返回函数处理得到的结果。
+    """
     with _get_file_lock(file_path):
         try:
             if not os.path.exists(file_path):
@@ -188,6 +254,10 @@ def atomic_load_json(file_path: str) -> List[Dict]:
 
 
 def atomic_save_json(file_path: str, data: List[Dict]) -> None:
+    """通过临时文件替换方式原子保存 JSON 数据。
+    :param file_path: 目标文件路径。
+    :param data: 需要保存或处理的数据。
+    """
     with _get_file_lock(file_path):
         try:
             os.makedirs(os.path.dirname(file_path), exist_ok=True)
@@ -199,6 +269,10 @@ def atomic_save_json(file_path: str, data: List[Dict]) -> None:
 
 
 def _get_file_lock(file_path: str) -> threading.Lock:
+    """取得目标文件对应的进程内互斥锁。
+    :param file_path: 目标文件路径。
+    :return: 返回完成读取、构建或转换后的结果。
+    """
     normalized_path = os.path.abspath(file_path)
     with _JSON_LOCKS_GUARD:
         if normalized_path not in _JSON_LOCKS:
@@ -207,6 +281,10 @@ def _get_file_lock(file_path: str) -> threading.Lock:
 
 
 def recover_memory_file(file_path: str) -> List[Dict]:
+    """修复损坏的会话文件并返回可用消息记录。
+    :param file_path: 目标文件路径。
+    :return: 返回函数处理得到的结果。
+    """
     try:
         if not os.path.exists(file_path):
             atomic_save_json(file_path, [])
@@ -225,6 +303,12 @@ def summarize_memory(
     max_rounds: int,
     summary_keep_rounds: int,
 ) -> Tuple[Optional[Dict], List[Dict]]:
+    """压缩过长的历史消息，同时保留最近对话轮次。
+    :param messages: 传入 ``messages`` 的业务数据。
+    :param max_rounds: 传入 ``max_rounds`` 的业务数据。
+    :param summary_keep_rounds: 传入 ``summary_keep_rounds`` 的业务数据。
+    :return: 返回函数处理得到的结果。
+    """
     max_items = max_rounds * 2
     keep_items = summary_keep_rounds * 2
     if len(messages) <= max_items:

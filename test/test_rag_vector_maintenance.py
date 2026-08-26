@@ -15,10 +15,17 @@ import types
 
 class FakeCollection:
     def __init__(self):
+        """初始化对象所需的状态和依赖。"""
         self.items = {}
         self.fail_add = False
 
     def get(self, ids=None, where=None, include=None):
+        """根据键读取配置项、缓存项或集合数据。
+        :param ids: 传入 ``ids`` 的业务数据。
+        :param where: 传入 ``where`` 的业务数据。
+        :param include: 传入 ``include`` 的业务数据。
+        :return: 返回函数处理得到的结果。
+        """
         matched = []
         if ids is not None:
             matched = [item_id for item_id in ids if item_id in self.items]
@@ -36,6 +43,11 @@ class FakeCollection:
         }
 
     def add(self, documents, metadatas, ids):
+        """执行 ``add`` 对应的项目处理逻辑。
+        :param documents: 传入 ``documents`` 的业务数据。
+        :param metadatas: 传入 ``metadatas`` 的业务数据。
+        :param ids: 传入 ``ids`` 的业务数据。
+        """
         if self.fail_add:
             self.fail_add = False
             raise RuntimeError("add failed")
@@ -45,16 +57,29 @@ class FakeCollection:
             self.items[item_id] = {"document": doc, "metadata": meta}
 
     def delete(self, ids=None, where=None):
+        """执行 ``delete`` 对应的项目处理逻辑。
+        :param ids: 传入 ``ids`` 的业务数据。
+        :param where: 传入 ``where`` 的业务数据。
+        """
         if ids is None and where is not None:
             ids = self.get(where=where)["ids"]
         for item_id in ids or []:
             self.items.pop(item_id, None)
 
     def query(self, **kwargs):
+        """执行 ``query`` 对应的项目处理逻辑。
+        :param kwargs: 传递给被包装函数的关键字参数。
+        :return: 返回函数处理得到的结果。
+        """
         return {"documents": [[]], "metadatas": [[]], "distances": [[]]}
 
 
 def _assert(condition, label):
+    """记录测试断言结果，并输出对应的通过或失败信息。
+    :param condition: 断言是否成立的布尔条件。
+    :param label: 用于日志或测试输出的说明标签。
+    :return: 返回函数处理得到的结果。
+    """
     if condition:
         print(f"  [PASS] {label}")
         return 0
@@ -63,6 +88,10 @@ def _assert(condition, label):
 
 
 def _load_module(tmpdir):
+    """在隔离依赖环境中重新加载待测试模块。
+    :param tmpdir: 传入 ``tmpdir`` 的业务数据。
+    :return: 返回完成读取、构建或转换后的结果。
+    """
     old_modules = {}
     for name in [
         "chromadb",
@@ -117,6 +146,9 @@ def _load_module(tmpdir):
 
 
 def _restore_modules(old_modules):
+    """恢复测试期间替换的 Python 模块。
+    :param old_modules: 传入 ``old_modules`` 的业务数据。
+    """
     for name, module in old_modules.items():
         if module is None:
             sys.modules.pop(name, None)

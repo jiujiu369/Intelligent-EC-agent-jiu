@@ -15,6 +15,11 @@ from tools.error_handler import RAG_FALLBACK_MESSAGE
 
 
 def _assert(condition, label):
+    """记录测试断言结果，并输出对应的通过或失败信息。
+    :param condition: 断言是否成立的布尔条件。
+    :param label: 用于日志或测试输出的说明标签。
+    :return: 返回函数处理得到的结果。
+    """
     if condition:
         print(f"  [PASS] {label}")
         return 0
@@ -24,11 +29,17 @@ def _assert(condition, label):
 
 class BrokenChroma:
     def __init__(self, path):
+        """初始化对象所需的状态和依赖。
+        :param path: 传入 ``path`` 的业务数据。
+        """
         raise RuntimeError("chroma broken")
 
 
 class FakeEmbeddingFunction:
     def __init__(self, model_name):
+        """初始化对象所需的状态和依赖。
+        :param model_name: 嵌入模型名称或模型路径。
+        """
         self.model_name = model_name
 
 

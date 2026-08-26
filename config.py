@@ -16,7 +16,10 @@ ROOT = os.path.dirname(os.path.abspath(__file__))
 
 
 def _model_path(relative: str) -> str:
-    """拼接模型路径：优先使用 .env 覆盖，其次绝对路径兼容，最后相对路径。"""
+    """拼接模型路径：优先使用 .env 覆盖，其次绝对路径兼容，最后相对路径。
+    :param relative: 相对于项目根目录的路径。
+    :return: 返回函数处理得到的结果。
+    """
     env_key = f"AGENT_RAG_{relative.upper().replace('-', '_').replace('.', '_')}"
     env_val = os.environ.get(env_key)
     if env_val and os.path.exists(env_val):
@@ -74,6 +77,7 @@ AGENT: Dict[str, Any] = {
 
 class Config:
     def __init__(self):
+        """初始化对象所需的状态和依赖。"""
         self._sections = {
             "API": API,
             "PATHS": PATHS,
@@ -83,6 +87,12 @@ class Config:
         }
 
     def get(self, section: str, key: str, default: Any = None) -> Any:
+        """根据键读取配置项、缓存项或集合数据。
+        :param section: 传入 ``section`` 的业务数据。
+        :param key: 用于定位配置、缓存或数据项的键。
+        :param default: 配置项不存在时使用的默认值。
+        :return: 返回函数处理得到的结果。
+        """
         section_name = section.upper()
         section_data = self._sections.get(section_name, {})
         value = section_data.get(key, default)
@@ -94,6 +104,11 @@ class Config:
 
     @staticmethod
     def _get_env_override(section: str, key: str) -> Any:
+        """执行 ``_get_env_override`` 对应的项目处理逻辑。
+        :param section: 传入 ``section`` 的业务数据。
+        :param key: 用于定位配置、缓存或数据项的键。
+        :return: 返回完成读取、构建或转换后的结果。
+        """
         env_names = (
             f"AGENT_{key.upper()}",
             f"AGENT_{section}_{key.upper()}",
@@ -105,6 +120,11 @@ class Config:
 
     @staticmethod
     def _cast_env_value(env_value: str, default: Any) -> Any:
+        """执行 ``_cast_env_value`` 对应的项目处理逻辑。
+        :param env_value: 传入 ``env_value`` 的业务数据。
+        :param default: 配置项不存在时使用的默认值。
+        :return: 返回函数处理得到的结果。
+        """
         if isinstance(default, bool):
             return env_value.strip().lower() in {"1", "true", "yes", "on"}
         if isinstance(default, int) and not isinstance(default, bool):
@@ -118,4 +138,10 @@ config = Config()
 
 
 def get(section: str, key: str, default: Any = None) -> Any:
+    """根据键读取配置项、缓存项或集合数据。
+    :param section: 传入 ``section`` 的业务数据。
+    :param key: 用于定位配置、缓存或数据项的键。
+    :param default: 配置项不存在时使用的默认值。
+    :return: 返回函数处理得到的结果。
+    """
     return config.get(section, key, default)

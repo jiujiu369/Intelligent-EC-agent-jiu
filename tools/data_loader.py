@@ -24,7 +24,10 @@ _aftersale_data: List[Dict] = []
 
 
 def load_json(file_path: str) -> List[Dict]:
-    """加载json数组文件"""
+    """加载json数组文件。
+    :param file_path: 目标文件路径。
+    :return: 返回完成读取、构建或转换后的结果。
+    """
     try:
         data = atomic_load_json(file_path)
         logger.info(f"JSON读取 path={file_path} count={len(data)}")
@@ -35,7 +38,10 @@ def load_json(file_path: str) -> List[Dict]:
 
 
 def save_json(file_path: str, data: List[Dict]):
-    """写入json文件（持久化保存修改）"""
+    """写入json文件（持久化保存修改）。
+    :param file_path: 目标文件路径。
+    :param data: 需要保存或处理的数据。
+    """
     try:
         atomic_save_json(file_path, data)
         logger.info(f"JSON写入 path={file_path} count={len(data)}")
@@ -45,6 +51,7 @@ def save_json(file_path: str, data: List[Dict]):
 
 # 程序启动自动加载全部数据
 def init_data():
+    """确保业务数据文件存在，并在缺失时写入初始数据。"""
     global _goods_data, _stock_data, _order_data, _aftersale_data
     _goods_data = load_json(GOODS_PATH)
     _stock_data = load_json(STOCK_PATH)
@@ -55,11 +62,10 @@ def init_data():
 
 # ===================== 对外提供接口（Agent直接调用）=====================
 def query_goods(goods_id: Optional[str] = None, goods_name: Optional[str] = None) -> List[Dict]:
-    """
-    查询商品信息
-    :param goods_id: 商品ID，精确查询
-    :param goods_name: 商品名称，模糊匹配
-    :return: 商品列表
+    """查询商品信息。
+    :param goods_id: 商品的唯一编号。
+    :param goods_name: 传入 ``goods_name`` 的业务数据。
+    :return: 返回完成读取、构建或转换后的结果。
     """
     result = []
     for item in _goods_data:
@@ -81,11 +87,10 @@ def query_goods(goods_id: Optional[str] = None, goods_name: Optional[str] = None
 
 
 def update_goods(goods_id: str, update_info: Optional[Dict] = None) -> Dict:
-    """
-    修改商品信息
-    :param goods_id: 需要修改的商品ID
-    :param update_info: 待更新字段字典
-    :return: 修改后的商品 / 失败提示
+    """修改商品信息。
+    :param goods_id: 商品的唯一编号。
+    :param update_info: 传入 ``update_info`` 的业务数据。
+    :return: 返回函数处理得到的结果。
     """
     if not goods_id:
         return {"status": "fail", "msg": "缺少商品ID"}
@@ -117,7 +122,10 @@ def update_goods(goods_id: str, update_info: Optional[Dict] = None) -> Dict:
 
 
 def query_stock(goods_id: Optional[str] = None) -> List[Dict]:
-    """查询库存，支持商品id筛选"""
+    """查询库存，支持商品id筛选。
+    :param goods_id: 商品的唯一编号。
+    :return: 返回完成读取、构建或转换后的结果。
+    """
     if not goods_id:
         return _stock_data
     # 数据字段为【商品ID】，兼容大小写
@@ -130,12 +138,12 @@ def query_order(
     start_time: Optional[str] = None,
     end_time: Optional[str] = None,
 ) -> List[Dict]:
-    """
-    查询订单
-    :param order_id: 订单号精确查询
-    :param goods_id: 根据商品id查询所有相关订单
-    :param start_time: 起始日期，格式 YYYY-MM-DD
-    :param end_time: 结束日期，格式 YYYY-MM-DD
+    """查询订单。
+    :param order_id: 传入 ``order_id`` 的业务数据。
+    :param goods_id: 商品的唯一编号。
+    :param start_time: 传入 ``start_time`` 的业务数据。
+    :param end_time: 传入 ``end_time`` 的业务数据。
+    :return: 返回完成读取、构建或转换后的结果。
     """
     res = []
     for order in _order_data:
@@ -150,10 +158,9 @@ def query_order(
 
 
 def create_aftersale_ticket(new_ticket: Dict) -> Dict:
-    """
-    创建售后工单
-    :param new_ticket: 工单完整字典，支持中英文字段名
-    工单字段：工单ID、关联订单号、问题类型、处理状态、处理记录、创建时间
+    """创建售后工单。
+    :param new_ticket: 传入 ``new_ticket`` 的业务数据。
+    :return: 返回函数处理得到的结果。
     """
     import datetime
     # 别名映射：把大模型/菜单常用key统一翻译成JSON真实字段名
@@ -191,6 +198,12 @@ def create_aftersale_ticket(new_ticket: Dict) -> Dict:
 
 
 def _order_time_in_range(order_time: str, start_time: Optional[str], end_time: Optional[str]) -> bool:
+    """判断订单时间是否位于指定的起止日期范围内。
+    :param order_time: 传入 ``order_time`` 的业务数据。
+    :param start_time: 传入 ``start_time`` 的业务数据。
+    :param end_time: 传入 ``end_time`` 的业务数据。
+    :return: 返回函数处理得到的结果。
+    """
     if not start_time and not end_time:
         return True
     import datetime
@@ -211,15 +224,17 @@ def _order_time_in_range(order_time: str, start_time: Optional[str], end_time: O
 
 
 def get_all_orders() -> List[Dict]:
-    """获取全部订单，用于销售报表统计"""
+    """获取全部订单，用于销售报表统计。
+    :return: 返回完成读取、构建或转换后的结果。
+    """
     return _order_data
 
 
 def export_sales_report(start_time: str = None, end_time: str = None) -> Dict:
-    """
-    导出销售报表，统计订单总额、订单数量
-    :param start_time: YYYY-MM-DD
-    :param end_time: YYYY-MM-DD
+    """导出销售报表，统计订单总额、订单数量。
+    :param start_time: 传入 ``start_time`` 的业务数据。
+    :param end_time: 传入 ``end_time`` 的业务数据。
+    :return: 返回函数处理得到的结果。
     """
     import datetime
     filter_orders = []
@@ -257,8 +272,17 @@ def export_sales_report(start_time: str = None, end_time: str = None) -> Dict:
 
 
 def _guard_tool_result(func):
+    """为业务工具统一补充异常捕获和结果包装。
+    :param func: 需要调用或装饰的函数。
+    :return: 返回函数处理得到的结果。
+    """
     @functools.wraps(func)
     def wrapper(*args, **kwargs):
+        """执行 ``wrapper`` 对应的项目处理逻辑。
+        :param args: 传递给被包装函数的位置参数。
+        :param kwargs: 传递给被包装函数的关键字参数。
+        :return: 返回函数处理得到的结果。
+        """
         result = wrap_tool_result(func.__name__, func(*args, **kwargs))
         if isinstance(result, dict) and result.get("msg") == "未找到匹配信息":
             logger.warning(f"工具查无结果 name={func.__name__} args={args} kwargs={kwargs}")

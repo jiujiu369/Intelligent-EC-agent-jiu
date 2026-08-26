@@ -9,6 +9,11 @@ import importlib
 
 
 def _assert(condition, label):
+    """记录测试断言结果，并输出对应的通过或失败信息。
+    :param condition: 断言是否成立的布尔条件。
+    :param label: 用于日志或测试输出的说明标签。
+    :return: 返回函数处理得到的结果。
+    """
     if condition:
         print(f"  [PASS] {label}")
         return 0
@@ -24,13 +29,20 @@ rate_limiter.clear_all_caches()
 
 class FakeClock:
     def __init__(self):
+        """初始化对象所需的状态和依赖。"""
         self.now = 1000.0
         self.slept = []
 
     def time(self):
+        """执行 ``time`` 对应的项目处理逻辑。
+        :return: 返回函数处理得到的结果。
+        """
         return self.now
 
     def sleep(self, seconds):
+        """执行 ``sleep`` 对应的项目处理逻辑。
+        :param seconds: 传入 ``seconds`` 的业务数据。
+        """
         self.slept.append(round(seconds, 3))
         self.now += seconds
 
@@ -48,6 +60,10 @@ calls = {"count": 0}
 
 @rate_limiter.ttl_cache(ttl_seconds=10, time_func=clock.time)
 def cached_query(value):
+    """执行 ``cached_query`` 对应的项目处理逻辑。
+    :param value: 需要转换、缓存或检查的值。
+    :return: 返回函数处理得到的结果。
+    """
     calls["count"] += 1
     return {"value": value, "count": calls["count"]}
 
@@ -64,6 +80,10 @@ llm_calls = {"count": 0}
 
 
 def ask_llm(query):
+    """执行 ``ask_llm`` 对应的项目处理逻辑。
+    :param query: 传入 ``query`` 的业务数据。
+    :return: 返回函数处理得到的结果。
+    """
     llm_calls["count"] += 1
     return f"answer-{llm_calls['count']}:{query}"
 

@@ -31,6 +31,10 @@ _PROJECT_ROOT = os.path.abspath(
 DATA_DIR = os.path.join(_PROJECT_ROOT, "datas")
 
 def _resolve_project_path(path: str) -> str:
+    """将配置路径解析为项目内的绝对路径。
+    :param path: 传入 ``path`` 的业务数据。
+    :return: 返回函数处理得到的结果。
+    """
     if os.path.isabs(path):
         return path
     return os.path.join(_PROJECT_ROOT, path)
@@ -56,10 +60,10 @@ KEY_LENGTH = 32             # 派生密钥长度（字节）
 # ====================== 密码哈希 ======================
 
 def _hash_password(password: str, salt: Optional[bytes] = None) -> Tuple[str, str]:
-    """
-    PBKDF2-SHA256 加盐哈希。
-    自动生成随机盐值；也可传入已有 salt 用于登录校验。
-    返回 (password_hash_hex, salt_hex)。
+    """PBKDF2-SHA256 加盐哈希。
+    :param password: 用户提供的登录密码。
+    :param salt: 密码哈希使用的随机盐值。
+    :return: 返回函数处理得到的结果。
     """
     if salt is None:
         salt = os.urandom(SALT_LENGTH)
@@ -74,9 +78,11 @@ def _hash_password(password: str, salt: Optional[bytes] = None) -> Tuple[str, st
 
 
 def verify_password(stored_hash: str, stored_salt: str, password: str) -> bool:
-    """
-    校验明文密码与存储的密文是否匹配。
-    使用恒定时间比较防止时序攻击。
+    """校验明文密码与存储的密文是否匹配。
+    :param stored_hash: 账户中保存的密码哈希值。
+    :param stored_salt: 账户中保存的密码盐值。
+    :param password: 用户提供的登录密码。
+    :return: 条件成立时返回 ``True``，否则返回 ``False``。
     """
     salt = bytes.fromhex(stored_salt)
     computed_hash, _ = _hash_password(password, salt)
@@ -84,7 +90,11 @@ def verify_password(stored_hash: str, stored_salt: str, password: str) -> bool:
 
 
 def _constant_time_compare(a: str, b: str) -> bool:
-    """恒定时间字符串比较，防止时序侧信道攻击。"""
+    """恒定时间字符串比较，防止时序侧信道攻击。
+    :param a: 参与比较的第一个值。
+    :param b: 传入 ``b`` 的业务数据。
+    :return: 返回函数处理得到的结果。
+    """
     if len(a) != len(b):
         return False
     result = 0
@@ -96,11 +106,7 @@ def _constant_time_compare(a: str, b: str) -> bool:
 # ====================== 文件初始化 ======================
 
 def init_auth_files() -> None:
-    """
-    自动初始化账号文件（无预设账号，仅创建空文件）。
-    - consumer_users.json / merchant_users.json
-    如果文件已存在则跳过，不会覆盖已有数据。
-    """
+    """自动初始化账号文件（无预设账号，仅创建空文件）。"""
     os.makedirs(DATA_DIR, exist_ok=True)
 
     for file_path, role in ((CONSUMER_FILE, ROLE_CONSUMER), (MERCHANT_FILE, ROLE_MERCHANT)):
@@ -117,7 +123,11 @@ def init_auth_files() -> None:
 
 
 def _init_with_preset(file_path: str, preset: dict, role: str) -> None:
-    """初始化账号文件，写入 preset 中的账号（传空字典则仅创建空文件）。"""
+    """初始化账号文件，写入 preset 中的账号（传空字典则仅创建空文件）。
+    :param file_path: 目标文件路径。
+    :param preset: 初始化用户文件时写入的预置账户数据。
+    :param role: 当前用户角色。
+    """
     users = {}
     for username, info in preset.items():
         plain = info.get("_plain_preset", "")
@@ -135,7 +145,10 @@ def _init_with_preset(file_path: str, preset: dict, role: str) -> None:
 # ====================== 用户文件读写 ======================
 
 def _load_users(role: str) -> dict:
-    """加载指定角色的用户文件，返回 {username: user_data}。"""
+    """加载指定角色的用户文件，返回 {username: user_data}。
+    :param role: 当前用户角色。
+    :return: 返回完成读取、构建或转换后的结果。
+    """
     file_path = _get_user_file(role)
     try:
         with open(file_path, "r", encoding="utf-8") as f:
@@ -149,7 +162,11 @@ def _load_users(role: str) -> dict:
 
 
 def _save_users(role: str, users: dict) -> bool:
-    """保存用户数据到文件。"""
+    """保存用户数据到文件。
+    :param role: 当前用户角色。
+    :param users: 需要保存的用户数据映射。
+    :return: 返回函数处理得到的结果。
+    """
     file_path = _get_user_file(role)
     try:
         with open(file_path, "w", encoding="utf-8") as f:
@@ -161,21 +178,21 @@ def _save_users(role: str, users: dict) -> bool:
 
 
 def _get_user_file(role: str) -> str:
-    """获取角色对应的用户文件路径。"""
+    """获取角色对应的用户文件路径。
+    :param role: 当前用户角色。
+    :return: 返回完成读取、构建或转换后的结果。
+    """
     return CONSUMER_FILE if role == ROLE_CONSUMER else MERCHANT_FILE
 
 
 # ====================== 账号注册 ======================
 
 def register_user(role: str, username: str, password: str) -> Tuple[bool, str]:
-    """
-    注册新用户。
-    返回 (success, message)。
-    规则：
-      - 用户名至少 3 位，密码至少 4 位
-      - 用户名仅允许字母、数字、下划线、中文
-      - 用户名不可重复
-      - 密码明文不做任何持久化，仅存密文 + 盐值
+    """注册新用户。
+    :param role: 当前用户角色。
+    :param username: 用户登录名。
+    :param password: 用户提供的登录密码。
+    :return: 返回函数处理得到的结果。
     """
     # -- 参数校验 --
     if role not in (ROLE_CONSUMER, ROLE_MERCHANT):
@@ -220,11 +237,11 @@ def register_user(role: str, username: str, password: str) -> Tuple[bool, str]:
 
 @rate_limit_login
 def login_user(role: str, username: str, password: str) -> Tuple[bool, str, Optional[str]]:
-    """
-    登录校验。
-    返回 (success, message, returned_role_or_None)。
-    成功时 returned_role 为角色标识；失败时为 None。
-    为防止暴力破解，无论用户是否存在，统一返回模糊提示。
+    """登录校验。
+    :param role: 当前用户角色。
+    :param username: 用户登录名。
+    :param password: 用户提供的登录密码。
+    :return: 返回函数处理得到的结果。
     """
     if role not in (ROLE_CONSUMER, ROLE_MERCHANT):
         logger.info(f"登录失败 reason=invalid_role role={role} username={username}")
@@ -261,10 +278,8 @@ def login_user(role: str, username: str, password: str) -> Tuple[bool, str, Opti
 # ====================== CLI 交互式登录流程 ======================
 
 def auth_interactive() -> Tuple[Optional[str], Optional[str]]:
-    """
-    交互式登录/注册流程入口。
-    启动 → 选角色 → 登录 or 注册 → 返回 (current_role, username)。
-    返回 (None, None) 表示用户放弃。
+    """交互式登录/注册流程入口。
+    :return: 返回函数处理得到的结果。
     """
     # -- 选择角色 --
     print("\n" + "=" * 50)
@@ -347,9 +362,9 @@ def auth_interactive() -> Tuple[Optional[str], Optional[str]]:
 
 
 def _getpass(prompt: str) -> str:
-    """
-    跨平台安全密码输入。
-    Windows 不支持 getpass 回显控制，回退到 input。
+    """跨平台安全密码输入。
+    :param prompt: 展示给用户或发送给模型的提示文本。
+    :return: 返回函数处理得到的结果。
     """
     try:
         import msvcrt
@@ -381,7 +396,9 @@ def _getpass(prompt: str) -> str:
 # ====================== 工具函数 ======================
 
 def _now_str() -> str:
-    """当前时间字符串。"""
+    """当前时间字符串。
+    :return: 返回函数处理得到的结果。
+    """
     from datetime import datetime
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 

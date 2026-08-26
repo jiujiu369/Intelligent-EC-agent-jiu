@@ -17,6 +17,10 @@ _pass, _fail = 0, 0
 
 
 def _assert(condition, label):
+    """记录测试断言结果，并输出对应的通过或失败信息。
+    :param condition: 断言是否成立的布尔条件。
+    :param label: 用于日志或测试输出的说明标签。
+    """
     global _pass, _fail
     if condition:
         _pass += 1
@@ -27,6 +31,10 @@ def _assert(condition, label):
 
 
 def _run_case(label, fn):
+    """执行单个测试用例，并将异常转换为失败记录。
+    :param label: 用于日志或测试输出的说明标签。
+    :param fn: 需要调用、包装或测试的函数。
+    """
     try:
         fn()
     except Exception as exc:
@@ -34,6 +42,9 @@ def _run_case(label, fn):
 
 
 def _backup_files():
+    """读取测试涉及的文件并保存可恢复的原始内容。
+    :return: 返回函数处理得到的结果。
+    """
     backups = {}
     for path in [GOODS_PATH, AFTERSALE_PATH]:
         if os.path.exists(path):
@@ -43,6 +54,9 @@ def _backup_files():
 
 
 def _restore_files(backups):
+    """将测试修改过的文件恢复为备份内容。
+    :param backups: 需要恢复的文件备份映射。
+    """
     for path, content in backups.items():
         with open(path, "w", encoding="utf-8") as f:
             f.write(content)
@@ -50,10 +64,15 @@ def _restore_files(backups):
 
 
 def _first_list_item(value):
+    """执行 ``_first_list_item`` 对应的项目处理逻辑。
+    :param value: 需要转换、缓存或检查的值。
+    :return: 返回函数处理得到的结果。
+    """
     return value[0] if isinstance(value, list) and value else None
 
 
 def test_query_goods():
+    """验证 query goods 场景符合预期行为。"""
     first = _first_list_item(query_goods())
     _assert(first is not None, "query_goods 全量查询有数据")
     goods_id = first["商品ID"]
@@ -67,6 +86,7 @@ def test_query_goods():
 
 
 def test_query_stock():
+    """验证 query stock 场景符合预期行为。"""
     first = _first_list_item(query_stock())
     _assert(first is not None, "query_stock 全量查询有数据")
     goods_id = first["商品ID"]
@@ -79,6 +99,7 @@ def test_query_stock():
 
 
 def test_query_order():
+    """验证 query order 场景符合预期行为。"""
     first = _first_list_item(query_order())
     _assert(first is not None, "query_order 全量查询有数据")
     order_id = first["订单号"]
@@ -92,6 +113,7 @@ def test_query_order():
 
 
 def test_create_aftersale_ticket():
+    """验证 create aftersale ticket 场景符合预期行为。"""
     ticket_id = f"TEST-{uuid.uuid4().hex[:8]}"
     created = create_aftersale_ticket({
         "ticket_id": ticket_id,
@@ -105,6 +127,7 @@ def test_create_aftersale_ticket():
 
 
 def test_update_goods():
+    """验证 update goods 场景符合预期行为。"""
     first = _first_list_item(query_goods())
     goods_id = first["商品ID"]
     new_price = first["售价"] + 1
@@ -117,6 +140,7 @@ def test_update_goods():
 
 
 def test_export_sales_report():
+    """验证 export sales report 场景符合预期行为。"""
     all_report = export_sales_report()
     ranged = export_sales_report(start_time="2026-06-03", end_time="2026-06-03")
     empty = export_sales_report(start_time="2099-01-01", end_time="2099-01-02")
@@ -126,6 +150,7 @@ def test_export_sales_report():
 
 
 def test_get_all_orders():
+    """验证 get all orders 场景符合预期行为。"""
     orders = get_all_orders()
     _assert(isinstance(orders, list) and len(orders) > 0, "get_all_orders 返回全部订单列表")
     _assert(all("订单号" in item for item in orders[:3]), "get_all_orders 订单结构包含订单号")

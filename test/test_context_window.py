@@ -21,6 +21,10 @@ _pass, _fail = 0, 0
 
 
 def _assert(condition, label):
+    """记录测试断言结果，并输出对应的通过或失败信息。
+    :param condition: 断言是否成立的布尔条件。
+    :param label: 用于日志或测试输出的说明标签。
+    """
     global _pass, _fail
     if condition:
         _pass += 1
@@ -31,6 +35,10 @@ def _assert(condition, label):
 
 
 def _run_case(label, fn):
+    """执行单个测试用例，并将异常转换为失败记录。
+    :param label: 用于日志或测试输出的说明标签。
+    :param fn: 需要调用、包装或测试的函数。
+    """
     try:
         fn()
     except Exception as exc:
@@ -38,6 +46,7 @@ def _run_case(label, fn):
 
 
 def test_user_scoped_session_memory_isolated():
+    """验证 user scoped session memory isolated 场景符合预期行为。"""
     with tempfile.TemporaryDirectory() as tmpdir:
         old_memory_dir = main_agent.MEMORY_DIR
         main_agent.MEMORY_DIR = tmpdir
@@ -68,6 +77,7 @@ def test_user_scoped_session_memory_isolated():
 
 
 def test_recent_context_window_shows_last_five_current_user_messages():
+    """验证 recent context window shows last five current user messages 场景符合预期行为。"""
     with tempfile.TemporaryDirectory() as tmpdir:
         old_memory_dir = main_agent.MEMORY_DIR
         main_agent.MEMORY_DIR = tmpdir

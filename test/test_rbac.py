@@ -17,6 +17,10 @@ _pass, _fail = 0, 0
 
 
 def _assert(condition, label):
+    """记录测试断言结果，并输出对应的通过或失败信息。
+    :param condition: 断言是否成立的布尔条件。
+    :param label: 用于日志或测试输出的说明标签。
+    """
     global _pass, _fail
     if condition:
         _pass += 1
@@ -27,6 +31,10 @@ def _assert(condition, label):
 
 
 def _run_case(label, fn):
+    """执行单个测试用例，并将异常转换为失败记录。
+    :param label: 用于日志或测试输出的说明标签。
+    :param fn: 需要调用、包装或测试的函数。
+    """
     try:
         fn()
     except Exception as exc:
@@ -34,6 +42,12 @@ def _run_case(label, fn):
 
 
 def _dispatch_with_rbac(func_name, role, **kwargs):
+    """在执行工具前检查角色权限，并返回标准化结果。
+    :param func_name: 工具或函数名称。
+    :param role: 当前用户角色。
+    :param kwargs: 传递给被包装函数的关键字参数。
+    :return: 返回函数处理得到的结果。
+    """
     if not check_permission(func_name, role):
         return {"status": "denied", "msg": get_permission_denied_msg(func_name, role)}
     mapping = {
@@ -48,6 +62,7 @@ def _dispatch_with_rbac(func_name, role, **kwargs):
 
 
 def test_permission_whitelist():
+    """验证 permission whitelist 场景符合预期行为。"""
     _assert(len(get_allowed_tools(ROLE_CONSUMER)) == 4, "buyer 权限白名单为 4 个工具")
     _assert(len(get_allowed_tools(ROLE_MERCHANT)) == 7, "merchant 权限白名单为 7 个工具")
     _assert("update_goods" not in get_allowed_tools(ROLE_CONSUMER), "buyer 无 update_goods 权限")
@@ -56,6 +71,7 @@ def test_permission_whitelist():
 
 
 def test_schema_filter():
+    """验证 schema filter 场景符合预期行为。"""
     consumer_names = {s["function"]["name"] for s in get_filtered_schemas(ROLE_CONSUMER, tool_schemas)}
     merchant_names = {s["function"]["name"] for s in get_filtered_schemas(ROLE_MERCHANT, tool_schemas)}
     _assert("update_goods" not in consumer_names, "buyer schemas 不含 update_goods")
@@ -67,6 +83,7 @@ def test_schema_filter():
 
 
 def test_permission_denied_dispatch():
+    """验证 permission denied dispatch 场景符合预期行为。"""
     result = _dispatch_with_rbac("update_goods", ROLE_CONSUMER, goods_id="SP001", update_info={"售价": 1})
     _assert(isinstance(result, dict) and result.get("status") == "denied", "buyer 调 update_goods 返回 status=denied")
     stock_result = _dispatch_with_rbac("query_stock", ROLE_CONSUMER, goods_id="SP001")
@@ -74,6 +91,7 @@ def test_permission_denied_dispatch():
 
 
 def test_query_goods_masking():
+    """验证 query goods masking 场景符合预期行为。"""
     goods = query_goods(goods_id="SP001")
     consumer_view = mask_tool_result("query_goods", goods, ROLE_CONSUMER)
     merchant_view = mask_tool_result("query_goods", goods, ROLE_MERCHANT)
@@ -83,6 +101,7 @@ def test_query_goods_masking():
 
 
 def test_role_prompt_suffix():
+    """验证 role prompt suffix 场景符合预期行为。"""
     consumer_prompt = get_role_prompt_suffix(ROLE_CONSUMER)
     merchant_prompt = get_role_prompt_suffix(ROLE_MERCHANT)
     _assert("买家" in consumer_prompt and "无法修改商品" in consumer_prompt and "查看库存" in consumer_prompt, "buyer 角色提示词包含正确角色描述")

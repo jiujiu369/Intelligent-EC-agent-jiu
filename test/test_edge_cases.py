@@ -26,6 +26,10 @@ _pass, _fail = 0, 0
 
 
 def _assert(condition, label):
+    """记录测试断言结果，并输出对应的通过或失败信息。
+    :param condition: 断言是否成立的布尔条件。
+    :param label: 用于日志或测试输出的说明标签。
+    """
     global _pass, _fail
     if condition:
         _pass += 1
@@ -36,6 +40,10 @@ def _assert(condition, label):
 
 
 def _run_case(label, fn):
+    """执行单个测试用例，并将异常转换为失败记录。
+    :param label: 用于日志或测试输出的说明标签。
+    :param fn: 需要调用、包装或测试的函数。
+    """
     try:
         fn()
     except Exception as exc:
@@ -43,6 +51,7 @@ def _run_case(label, fn):
 
 
 def test_broken_memory_file():
+    """验证 broken memory file 场景符合预期行为。"""
     session_name = "edge_broken_memory"
     session_path = get_session_path(session_name)
     os.makedirs(os.path.dirname(session_path), exist_ok=True)
@@ -57,10 +66,14 @@ def test_broken_memory_file():
 
 
 def test_concurrent_json_write():
+    """验证 concurrent json write 场景符合预期行为。"""
     with tempfile.TemporaryDirectory() as tmpdir:
         path = os.path.join(tmpdir, "data.json")
 
         def worker(idx):
+            """执行 ``worker`` 对应的项目处理逻辑。
+            :param idx: 传入 ``idx`` 的业务数据。
+            """
             atomic_save_json(path, [{"idx": idx}])
 
         threads = [threading.Thread(target=worker, args=(idx,)) for idx in range(20)]
@@ -74,6 +87,7 @@ def test_concurrent_json_write():
 
 
 def test_long_input():
+    """验证 long input 场景符合预期行为。"""
     result = validate_user_input("查订单" + "很长" * 300)
     _assert(result.ok, "超长输入仍允许继续处理")
     _assert(result.text is not None and len(result.text) == 500, "超长输入被截断到 500 字符")
@@ -81,9 +95,14 @@ def test_long_input():
 
 
 def test_api_timeout():
+    """验证 api timeout 场景符合预期行为。"""
     old_post = api_monitor.requests.post
 
     def fake_post(*args, **kwargs):
+        """执行 ``fake_post`` 对应的项目处理逻辑。
+        :param args: 传递给被包装函数的位置参数。
+        :param kwargs: 传递给被包装函数的关键字参数。
+        """
         raise api_monitor.requests.exceptions.Timeout()
 
     try:
@@ -103,6 +122,7 @@ def test_api_timeout():
 
 
 def test_role_switch_context_clear():
+    """验证 role switch context clear 场景符合预期行为。"""
     session_name = "edge_role_switch"
     save_memory([
         {"role": "user", "content": "旧问题"},

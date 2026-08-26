@@ -73,7 +73,10 @@ init_auth_files()
 # ====================== 运维演示 ======================
 
 def refresh_ops_panel(state):
-    """刷新运维演示面板：ChromaDB 状态、API 配置、RAG 参数。仅商家可查看。"""
+    """刷新运维演示面板：ChromaDB 状态、API 配置、RAG 参数。仅商家可查看。
+    :param state: 界面保存的当前登录及会话状态。
+    :return: 返回函数处理得到的结果。
+    """
     import config
     if not state or not state.get("username") or state.get("role") != ROLE_MERCHANT:
         return "仅商家角色可查看运维面板"
@@ -126,16 +129,30 @@ def refresh_ops_panel(state):
 # ====================== 辅助函数 ======================
 
 def _role_label(role: str) -> str:
+    """将内部角色编码转换为界面显示名称。
+    :param role: 当前用户角色。
+    :return: 返回函数处理得到的结果。
+    """
     return "消费者" if role == ROLE_CONSUMER else "商家"
 
 
 def _load_history(session, username, role, limit=30):
-    """加载会话历史，转为 Gradio messages 格式 [{"role":..,"content":..}, ...]。"""
+    """加载会话历史，转为 Gradio messages 格式 [{"role":..,"content":..}, ...]。
+    :param session: 当前会话名称或会话数据。
+    :param username: 用户登录名。
+    :param role: 当前用户角色。
+    :param limit: 最多读取或返回的记录数量。
+    :return: 返回完成读取、构建或转换后的结果。
+    """
     records = get_recent_chat_records(session, username=username, role=role, limit=limit)
     return [{"role": r["role"], "content": r["content"]} for r in records]
 
 
 def _status_text(state):
+    """根据登录状态生成界面顶部的状态文本。
+    :param state: 界面保存的当前登录及会话状态。
+    :return: 返回函数处理得到的结果。
+    """
     if not state or not state.get("username"):
         return "未登录"
     return (f"角色：{_role_label(state['role'])}　|　"
@@ -145,7 +162,12 @@ def _status_text(state):
 # ====================== 回调函数 ======================
 
 def do_login(role_radio, username, password):
-    """登录：成功切换到主界面，失败提示。检测 API Key 是否已配置。"""
+    """登录：成功切换到主界面，失败提示。检测 API Key 是否已配置。
+    :param role_radio: 界面角色选择控件提交的值。
+    :param username: 用户登录名。
+    :param password: 用户提供的登录密码。
+    :return: 返回函数处理得到的结果。
+    """
     import config
     role = ROLE_CONSUMER if "消费者" in str(role_radio) else ROLE_MERCHANT
     username = (username or "").strip()
@@ -175,7 +197,12 @@ def do_login(role_radio, username, password):
 
 
 def do_register(role_radio, username, password):
-    """注册新账号。"""
+    """注册新账号。
+    :param role_radio: 界面角色选择控件提交的值。
+    :param username: 用户登录名。
+    :param password: 用户提供的登录密码。
+    :return: 返回函数处理得到的结果。
+    """
     role = ROLE_CONSUMER if "消费者" in str(role_radio) else ROLE_MERCHANT
     username = (username or "").strip()
     ok, msg = register_user(role, username, password or "")
@@ -183,7 +210,12 @@ def do_register(role_radio, username, password):
 
 
 def chat_respond(message, history, state):
-    """发送消息，调用 Agent 获取回答。支持帮助/菜单快捷命令。"""
+    """发送消息，调用 Agent 获取回答。支持帮助/菜单快捷命令。
+    :param message: 用户输入或待处理的消息文本。
+    :param history: 当前会话的历史消息。
+    :param state: 界面保存的当前登录及会话状态。
+    :return: 返回函数处理得到的结果。
+    """
     if not state or not state.get("username"):
         return history, "", "请先登录"
     message = (message or "").strip()
@@ -215,7 +247,11 @@ def chat_respond(message, history, state):
 
 
 def new_session(new_name, state):
-    """新建会话（名称留空则自动编号）。"""
+    """新建会话（名称留空则自动编号）。
+    :param new_name: 准备创建的新会话名称。
+    :param state: 界面保存的当前登录及会话状态。
+    :return: 返回函数处理得到的结果。
+    """
     if not state or not state.get("username"):
         return gr.update(), [], "请先登录", state
     name = (new_name or "").strip()
@@ -231,7 +267,11 @@ def new_session(new_name, state):
 
 
 def switch_session(selected, state):
-    """切换到选定的会话。"""
+    """切换到选定的会话。
+    :param selected: 用户当前选中的会话名称。
+    :param state: 界面保存的当前登录及会话状态。
+    :return: 返回函数处理得到的结果。
+    """
     if not state or not state.get("username"):
         return [], "请先登录", state, gr.update()
     session = selected or DEFAULT_SESSION
@@ -241,7 +281,10 @@ def switch_session(selected, state):
 
 
 def clear_current(state):
-    """清空当前会话记忆。"""
+    """清空当前会话记忆。
+    :param state: 界面保存的当前登录及会话状态。
+    :return: 返回函数处理得到的结果。
+    """
     if not state or not state.get("username"):
         return [], "请先登录", state
     clear_memory(state["session"], username=state["username"], role=state["role"])
@@ -249,7 +292,10 @@ def clear_current(state):
 
 
 def clear_all_sessions(state):
-    """清空全部会话记忆。"""
+    """清空全部会话记忆。
+    :param state: 界面保存的当前登录及会话状态。
+    :return: 返回函数处理得到的结果。
+    """
     if not state or not state.get("username"):
         return [], "请先登录", state, gr.update()
     clear_all_memory(username=state["username"], role=state["role"])
@@ -259,7 +305,9 @@ def clear_all_sessions(state):
 
 
 def relogin():
-    """重新登录：回到登录页，清空状态。"""
+    """重新登录：回到登录页，清空状态。
+    :return: 返回函数处理得到的结果。
+    """
     return (
         gr.update(visible=True), gr.update(visible=False),
         "", {}, [], gr.update(choices=[], value=None), "未登录", "", "",
@@ -268,7 +316,10 @@ def relogin():
 
 
 def refresh_sessions(state):
-    """刷新会话列表下拉框。"""
+    """刷新会话列表下拉框。
+    :param state: 界面保存的当前登录及会话状态。
+    :return: 返回函数处理得到的结果。
+    """
     if not state or not state.get("username"):
         return gr.update()
     sessions = list_sessions(state["username"], state["role"])

@@ -49,6 +49,10 @@ from tools.rbac import (
 _pass, _fail = 0, 0
 
 def _assert(condition, label):
+    """记录测试断言结果，并输出对应的通过或失败信息。
+    :param condition: 断言是否成立的布尔条件。
+    :param label: 用于日志或测试输出的说明标签。
+    """
     global _pass, _fail
     if condition:
         _pass += 1
@@ -58,7 +62,9 @@ def _assert(condition, label):
         print(f"  [FAIL] {label}")
 
 def _backup_files():
-    """备份现有用户文件。"""
+    """备份现有用户文件。
+    :return: 返回函数处理得到的结果。
+    """
     backups = {}
     for f in (CONSUMER_FILE, MERCHANT_FILE):
         if os.path.exists(f):
@@ -67,7 +73,9 @@ def _backup_files():
     return backups
 
 def _restore_files(backups):
-    """还原备份。"""
+    """还原备份。
+    :param backups: 需要恢复的文件备份映射。
+    """
     for path, content in backups.items():
         with open(path, "w", encoding="utf-8") as f:
             f.write(content)

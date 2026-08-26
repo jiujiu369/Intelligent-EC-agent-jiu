@@ -43,7 +43,10 @@ _CN_TENS = ["", "十", "二十", "三十", "四十", "五十", "六十", "七十
 
 
 def _to_cn_num(n: int) -> str:
-    """阿拉伯数字 → 中文数字（1-99）"""
+    """阿拉伯数字 → 中文数字（1-99）。
+    :param n: 需要转换或处理的整数。
+    :return: 返回函数处理得到的结果。
+    """
     if n <= 0:
         return "零"
     if n <= 10:
@@ -62,14 +65,18 @@ if not os.path.exists(MEMORY_DIR):
 
 
 def normalize_session_name(session_name: str) -> str:
+    """将会话名称转换为可安全用于文件名的形式。
+    :param session_name: 用于隔离上下文的会话名称。
+    :return: 返回完成读取、构建或转换后的结果。
+    """
     return "".join([c if c.isalnum() else "_" for c in session_name.strip()]) or DEFAULT_SESSION
 
 
 def _parse_command_arg(raw_input: str, prefix: str):
-    """
-    解析命令行参数，支持无空格、冒号分隔、多空格分隔等写法:
-      "新建对话咨询" / "新建对话：咨询" / "新建对话   咨询" 等效
-    返回: (matched: bool, argument: str|None)
+    """解析命令行参数，支持无空格、冒号分隔、多空格分隔等写法。
+    :param raw_input: 尚未解析的用户原始输入。
+    :param prefix: 用于识别命令的文本前缀。
+    :return: 返回函数处理得到的结果。
     """
     if not raw_input.startswith(prefix):
         return False, None
@@ -80,6 +87,11 @@ def _parse_command_arg(raw_input: str, prefix: str):
 
 
 def _get_user_scope(username: Optional[str] = None, role: Optional[str] = None) -> str:
+    """生成用于隔离用户数据的安全目录标识。
+    :param username: 用户登录名。
+    :param role: 当前用户角色。
+    :return: 返回完成读取、构建或转换后的结果。
+    """
     if not username:
         return ""
     safe_role = normalize_session_name(role or "user")
@@ -88,6 +100,11 @@ def _get_user_scope(username: Optional[str] = None, role: Optional[str] = None) 
 
 
 def _get_memory_base_dir(username: Optional[str] = None, role: Optional[str] = None) -> str:
+    """计算指定用户和角色对应的会话存储目录。
+    :param username: 用户登录名。
+    :param role: 当前用户角色。
+    :return: 返回完成读取、构建或转换后的结果。
+    """
     user_scope = _get_user_scope(username, role)
     if not user_scope:
         return MEMORY_DIR
@@ -99,13 +116,23 @@ def get_session_label(
     username: Optional[str] = None,
     role: Optional[str] = None,
 ) -> str:
+    """生成供界面显示的会话名称标签。
+    :param session_name: 用于隔离上下文的会话名称。
+    :param username: 用户登录名。
+    :param role: 当前用户角色。
+    :return: 返回完成读取、构建或转换后的结果。
+    """
     user_scope = _get_user_scope(username, role)
     safe_name = normalize_session_name(session_name)
     return f"{user_scope}/{safe_name}" if user_scope else safe_name
 
 
 def _next_auto_session(username: Optional[str] = None, role: Optional[str] = None) -> str:
-    """返回下一个自动编号的会话名：对话一、对话二、..."""
+    """返回下一个自动编号的会话名：对话一、对话二、...。
+    :param username: 用户登录名。
+    :param role: 当前用户角色。
+    :return: 返回函数处理得到的结果。
+    """
     existing = set(list_sessions(username=username, role=role))
     i = 1
     while True:
@@ -120,11 +147,22 @@ def get_session_path(
     username: Optional[str] = None,
     role: Optional[str] = None,
 ) -> str:
+    """计算指定用户会话对应的 JSON 文件路径。
+    :param session_name: 用于隔离上下文的会话名称。
+    :param username: 用户登录名。
+    :param role: 当前用户角色。
+    :return: 返回完成读取、构建或转换后的结果。
+    """
     safe_name = normalize_session_name(session_name)
     return os.path.join(_get_memory_base_dir(username, role), f"{safe_name}.json")
 
 
 def list_sessions(username: Optional[str] = None, role: Optional[str] = None) -> List[str]:
+    """列出指定用户保存的全部会话。
+    :param username: 用户登录名。
+    :param role: 当前用户角色。
+    :return: 返回完成读取、构建或转换后的结果。
+    """
     sessions = []
     base_dir = _get_memory_base_dir(username, role)
     if not os.path.exists(base_dir):
@@ -140,6 +178,12 @@ def load_memory(
     username: Optional[str] = None,
     role: Optional[str] = None,
 ) -> List[Dict]:
+    """加载并恢复指定会话的持久化消息。
+    :param session_name: 用于隔离上下文的会话名称。
+    :param username: 用户登录名。
+    :param role: 当前用户角色。
+    :return: 返回完成读取、构建或转换后的结果。
+    """
     session_path = get_session_path(session_name, username=username, role=role)
     return recover_memory_file(session_path)
 
@@ -150,6 +194,12 @@ def save_memory(
     username: Optional[str] = None,
     role: Optional[str] = None,
 ):
+    """限制上下文长度后原子保存会话消息。
+    :param messages: 传入 ``messages`` 的业务数据。
+    :param session_name: 用于隔离上下文的会话名称。
+    :param username: 用户登录名。
+    :param role: 当前用户角色。
+    """
     session_path = get_session_path(session_name, username=username, role=role)
     memory_messages = [m for m in messages if m.get("role") != "system"]
     summary_message, memory_messages = summarize_memory(
@@ -167,6 +217,11 @@ def clear_memory(
     username: Optional[str] = None,
     role: Optional[str] = None,
 ) -> None:
+    """清空指定会话的持久化消息记录。
+    :param session_name: 用于隔离上下文的会话名称。
+    :param username: 用户登录名。
+    :param role: 当前用户角色。
+    """
     session_path = get_session_path(session_name, username=username, role=role)
     if os.path.exists(session_path):
         try:
@@ -177,6 +232,10 @@ def clear_memory(
 
 
 def clear_all_memory(username: Optional[str] = None, role: Optional[str] = None) -> None:
+    """删除指定用户范围内保存的全部会话记录。
+    :param username: 用户登录名。
+    :param role: 当前用户角色。
+    """
     base_dir = _get_memory_base_dir(username, role)
     if not os.path.exists(base_dir):
         return
@@ -195,6 +254,13 @@ def get_recent_chat_records(
     role: Optional[str] = None,
     limit: int = 5,
 ) -> List[Dict]:
+    """读取指定用户最近的会话摘要记录。
+    :param session_name: 用于隔离上下文的会话名称。
+    :param username: 用户登录名。
+    :param role: 当前用户角色。
+    :param limit: 最多读取或返回的记录数量。
+    :return: 返回完成读取、构建或转换后的结果。
+    """
     memory = load_memory(session_name, username=username, role=role)
     chat_records = []
     for item in memory:
@@ -208,6 +274,10 @@ def get_recent_chat_records(
 
 
 def format_recent_chat_records(records: List[Dict]) -> str:
+    """将最近会话记录格式化为便于展示的文本。
+    :param records: 传入 ``records`` 的业务数据。
+    :return: 返回完成读取、构建或转换后的结果。
+    """
     if not records:
         return "最近没有聊天记录。"
     lines = ["最近五条聊天记录："]
@@ -225,6 +295,12 @@ def print_recent_chat_records(
     role: Optional[str] = None,
     limit: int = 5,
 ) -> None:
+    """将最近会话记录输出到终端。
+    :param session_name: 用于隔离上下文的会话名称。
+    :param username: 用户登录名。
+    :param role: 当前用户角色。
+    :param limit: 最多读取或返回的记录数量。
+    """
     records = get_recent_chat_records(session_name, username=username, role=role, limit=limit)
     print(format_recent_chat_records(records))
 
@@ -232,6 +308,14 @@ def print_recent_chat_records(
 def run_agent(user_query: str, session_name: str = DEFAULT_SESSION,
               current_role: str = ROLE_CONSUMER, use_memory: bool = True,
               current_username: Optional[str] = None) -> str:
+    """执行 Agent 请求，并将异常转换为用户可读回答。
+    :param user_query: 传入 ``user_query`` 的业务数据。
+    :param session_name: 用于隔离上下文的会话名称。
+    :param current_role: 传入 ``current_role`` 的业务数据。
+    :param use_memory: 传入 ``use_memory`` 的业务数据。
+    :param current_username: 传入 ``current_username`` 的业务数据。
+    :return: 返回函数处理得到的结果。
+    """
     try:
         return _run_agent(user_query, session_name, current_role, use_memory, current_username)
     except Exception as exc:
@@ -242,6 +326,14 @@ def run_agent(user_query: str, session_name: str = DEFAULT_SESSION,
 def _run_agent(user_query: str, session_name: str = DEFAULT_SESSION,
                current_role: str = ROLE_CONSUMER, use_memory: bool = True,
                current_username: Optional[str] = None) -> str:
+    """执行 ``_run_agent`` 对应的项目处理逻辑。
+    :param user_query: 传入 ``user_query`` 的业务数据。
+    :param session_name: 用于隔离上下文的会话名称。
+    :param current_role: 传入 ``current_role`` 的业务数据。
+    :param use_memory: 传入 ``use_memory`` 的业务数据。
+    :param current_username: 传入 ``current_username`` 的业务数据。
+    :return: 返回函数处理得到的结果。
+    """
     scoped_session = get_session_label(session_name, current_username, current_role)
     input_result = validate_user_input(user_query)
     if not input_result.ok:
@@ -391,12 +483,25 @@ def _run_agent(user_query: str, session_name: str = DEFAULT_SESSION,
 
 
 def _with_input_notice(answer: str, input_notice: str = None) -> str:
+    """在回答前附加输入清洗或截断提示。
+    :param answer: 待检查或处理的回答文本。
+    :param input_notice: 传入 ``input_notice`` 的业务数据。
+    :return: 返回函数处理得到的结果。
+    """
     if input_notice:
         return f"{input_notice}\n{answer}"
     return answer
 
 
 def _finalize_answer(answer: str, input_notice: str, tool_results: List, session_name: str, user_query: str) -> str:
+    """完成回答风险检查、上下文保存和输出整理。
+    :param answer: 待检查或处理的回答文本。
+    :param input_notice: 传入 ``input_notice`` 的业务数据。
+    :param tool_results: 传入 ``tool_results`` 的业务数据。
+    :param session_name: 用于隔离上下文的会话名称。
+    :param user_query: 传入 ``user_query`` 的业务数据。
+    :return: 返回函数处理得到的结果。
+    """
     check_result = check_hallucination(answer, tool_results, session_name=session_name)
     logger.info(
         f"幻觉检测 score={check_result['score']} risk={check_result['risk']} ratio={check_result['session_stats']['risk_ratio']}",
@@ -408,6 +513,10 @@ def _finalize_answer(answer: str, input_notice: str, tool_results: List, session
 
 
 def _summarize_tool_result(result) -> str:
+    """压缩工具结果，生成适合写入会话记录的摘要。
+    :param result: 工具调用或业务处理结果。
+    :return: 返回函数处理得到的结果。
+    """
     if isinstance(result, list):
         return f"list_count={len(result)}"
     if isinstance(result, dict):

@@ -25,11 +25,19 @@ REFUSAL_MARKERS = [
 
 
 def is_refusal(answer: str) -> bool:
+    """判断回答是否属于无法处理请求的拒答。
+    :param answer: 待检查或处理的回答文本。
+    :return: 条件成立时返回 ``True``，否则返回 ``False``。
+    """
     return any(m in (answer or "") for m in REFUSAL_MARKERS)
 
 
 def is_hallucination(answer: str, session: str) -> bool:
-    """用项目内置幻觉检测器判定；对知识库外问题，工具结果应为空 {}。"""
+    """用项目内置幻觉检测器判定；对知识库外问题，工具结果应为空 {}。
+    :param answer: 待检查或处理的回答文本。
+    :param session: 当前会话名称或会话数据。
+    :return: 条件成立时返回 ``True``，否则返回 ``False``。
+    """
     answer = answer or ""
     # 1) 命中兜底/拒答 → 不算幻觉
     if is_refusal(answer):
@@ -46,7 +54,10 @@ def is_hallucination(answer: str, session: str) -> bool:
 
 
 def run_baseline(question: str) -> str:
-    """裸 LLM：不接 RAG、不接工具，仅直接问答。"""
+    """裸 LLM：不接 RAG、不接工具，仅直接问答。
+    :param question: 待检索或回答的问题文本。
+    :return: 返回函数处理得到的结果。
+    """
     client = CloudLLMClient(
         api_key=config.get("API", "api_key"),
         base_url=config.get("API", "base_url"),
@@ -57,6 +68,7 @@ def run_baseline(question: str) -> str:
 
 
 def main():
+    """执行当前脚本的主要工作流程。"""
     with open(os.path.join(os.path.dirname(__file__), "eval_set.json"), encoding="utf-8") as f:
         data = json.load(f)
     questions = data["questions"]

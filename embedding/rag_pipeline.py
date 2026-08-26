@@ -23,17 +23,22 @@ logger = get_logger(__name__)
 
 # ===================== 路径配置（无需修改） =====================
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-BASE_DIR = os.path.join(PROJECT_ROOT, config.get("PATHS", "datas_dir"))
+BASE_DIR = os.path.join(PROJECT_ROOT, config.get("PATHS", "datas_dir"))#RAG项目数据
 CHROMA_PERSIST_PATH = os.path.join(PROJECT_ROOT, config.get("PATHS", "chroma_persist_dir"))
 FALLBACK_CHROMA_PERSIST_PATH = os.path.join(PROJECT_ROOT, config.get("PATHS", "chroma_persist_dir_384"))
-DOC_FOLDER_PATH = os.path.join(PROJECT_ROOT, config.get("PATHS", "docs_dir"))
+DOC_FOLDER_PATH = os.path.join(PROJECT_ROOT, config.get("PATHS", "docs_dir"))#项目数据地址
 GOODS_JSON_PATH = os.path.join(PROJECT_ROOT, config.get("PATHS", "goods_json")) # 新增商品json路径
 COLLECTION_NAME = "customer_service_docs"
 FALLBACK_COLLECTION_NAME = "customer_service_docs_384"
 FALLBACK_MODEL_NAME = config.get("RAG", "fallback_model")
 
-
+#=================加载本地embedding模型=====================
 def _load_embedding_function(model_name: str, label: str):
+    """加载指定的文本嵌入模型，并记录加载状态。
+    :param model_name: 嵌入模型名称或模型路径。
+    :param label: 用于日志或测试输出的说明标签。
+    :return: 返回完成读取、构建或转换后的结果。
+    """
     try:
         resolved_model_name = _resolve_model_name(model_name)
         fn = SentenceTransformerEmbeddingFunction(model_name=resolved_model_name)
@@ -43,8 +48,12 @@ def _load_embedding_function(model_name: str, label: str):
         logger.warning(f"加载 {label} embedding 模型失败 error={e}")
         return None
 
-
+#================解析模型路径,保证优先运行本地模型=============
 def _resolve_model_name(model_name: str) -> str:
+    """优先解析并返回项目本地存在的模型路径。
+    :param model_name: 嵌入模型名称或模型路径。
+    :return: 返回函数处理得到的结果。
+    """
     if os.path.isabs(model_name):
         return model_name
     local_path = os.path.join(PROJECT_ROOT, model_name)
@@ -52,30 +61,37 @@ def _resolve_model_name(model_name: str) -> str:
         return local_path
     return model_name
 
-
+#=================初始化向量库：加载向量模型->创建持久化客户端->获取/新建向量库集合=======================
 def _init_chroma_collection(model_name: str, persist_path: str, collection_name: str, label: str):
+    """加载嵌入模型并连接或创建持久化向量集合。
+    :param model_name: 嵌入模型名称或模型路径。
+    :param persist_path: 向量数据库的持久化目录。
+    :param collection_name: 向量集合名称。
+    :param label: 用于日志或测试输出的说明标签。
+    :return: 返回函数处理得到的结果。
+    """
     embedding_function = _load_embedding_function(model_name, label)
     if embedding_function is None:
         return None, None, None, False
-    try:
-        client = chromadb.PersistentClient(path=persist_path)
+    try:# 优先使用本地模型，没有则下载
+        client = chromadb.PersistentClient(path=persist_path)#持久化向量库客户端
         target_collection = client.get_or_create_collection(
             name=collection_name,
             embedding_function=embedding_function
         )
         return embedding_function, client, target_collection, False
-    except Exception as e:
+    except Exception as e:#捕获异常，返回异常日志label
         logger.error(f"{label} ChromaDB连接异常 path={persist_path} error={e}")
         return embedding_function, None, None, True
 
-
+#=====bge主库==========
 embedding_fn, chroma_client, collection, chroma_connection_failed = _init_chroma_collection(
     config.get("RAG", "embedding_model"),
     CHROMA_PERSIST_PATH,
     COLLECTION_NAME,
     "primary-768",
 )
-
+#=========minilm副库，主库加载失败则运行副库，两个都失效则兜底jieba管家次检索===============
 fallback_embedding_fn, fallback_chroma_client, fallback_collection, fallback_chroma_connection_failed = _init_chroma_collection(
     FALLBACK_MODEL_NAME,
     FALLBACK_CHROMA_PERSIST_PATH,
@@ -84,23 +100,33 @@ fallback_embedding_fn, fallback_chroma_client, fallback_collection, fallback_chr
 )
 
 # ===================== 文件读取函数 =====================
+#文件清洗函数
 def clean_text(raw_text: str) -> str:
-    """统一清洗文本：去除Markdown标记、多余换行、空白符号"""
-    text = re.sub(r'[#*`>~-]{1,4}', '', raw_text)
-    text = re.sub(r'\n{2,}', '\n', text)
-    text = re.sub(r'\s+', ' ', text)
+    """统一清洗文本：去除Markdown标记、多余换行、空白符号。
+    :param raw_text: 尚未清洗的原始文本。
+    :return: 返回函数处理得到的结果。
+    """
+    text = re.sub(r'[#*`>~-]{1,4}', '', raw_text) #删除[]中匹配的符号
+    text = re.sub(r'\n{2,}', '\n', text)    #删除多余换行
+    text = re.sub(r'\s+', ' ', text)    #删除多余空格
     return text.strip()
 
 
 def load_txt_md(file_path: str) -> str:
-    """读取txt / md"""
+    """读取txt / md。
+    :param file_path: 目标文件路径。
+    :return: 返回完成读取、构建或转换后的结果。
+    """
     with open(file_path, "r", encoding="utf-8") as f:
         raw = f.read()
     return clean_text(raw)
 
 
 def load_pdf(file_path: str) -> str:
-    """读取PDF"""
+    """读取PDF。
+    :param file_path: 目标文件路径。
+    :return: 返回完成读取、构建或转换后的结果。
+    """
     reader = PdfReader(file_path)
     page_texts = []
     for page in reader.pages:
@@ -112,7 +138,10 @@ def load_pdf(file_path: str) -> str:
 
 
 def load_docx(file_path: str) -> str:
-    """读取docx Word文档（不支持 .doc）"""
+    """读取docx Word文档（不支持 .doc）。
+    :param file_path: 目标文件路径。
+    :return: 返回完成读取、构建或转换后的结果。
+    """
     doc = Document(file_path)
     para_texts = []
     for para in doc.paragraphs:
@@ -123,8 +152,11 @@ def load_docx(file_path: str) -> str:
 
 
 def load_document(file_path: str) -> str:
-    """自动根据后缀选择解析器"""
-    ext = os.path.splitext(file_path)[1].lower()
+    """自动根据后缀选择解析器。
+    :param file_path: 目标文件路径。
+    :return: 返回完成读取、构建或转换后的结果。
+    """
+    ext = os.path.splitext(file_path)[1].lower()#拆分后缀函数
     if ext in [".txt", ".md"]:
         return load_txt_md(file_path)
     elif ext == ".pdf":
@@ -137,7 +169,10 @@ def load_document(file_path: str) -> str:
 
 
 def load_all_docs(doc_dir: str = DOC_FOLDER_PATH) -> List[Dict[str, str]]:
-    """遍历文件夹加载全部支持文档【售后政策文档】"""
+    """遍历文件夹加载全部支持文档【售后政策文档】。
+    :param doc_dir: 待扫描的文档目录路径。
+    :return: 返回完成读取、构建或转换后的结果。
+    """
     doc_list = []
     if not os.path.exists(doc_dir):
         logger.warning(f"文档目录不存在 path={doc_dir}")
@@ -150,7 +185,7 @@ def load_all_docs(doc_dir: str = DOC_FOLDER_PATH) -> List[Dict[str, str]]:
         if ext not in support_suffix:
             continue
 
-        content = load_document(full_path)
+        content = load_document(full_path)#调用前面函数解析文件后缀
         if len(content) > 10:
             doc_list.append({
                 "source": filename,
@@ -161,6 +196,11 @@ def load_all_docs(doc_dir: str = DOC_FOLDER_PATH) -> List[Dict[str, str]]:
 # =====================【新增】商品JSON加载函数 =====================
 #   在加载 JSON 后预处理，直接标准化所有键名
 def normalize_goods_key(goods_dict:Dict) -> Dict:
+    #把 JSON 里的英文字段名翻译成中文
+    """将商品字段别名统一转换为标准字段名。
+    :param goods_dict: 传入 ``goods_dict`` 的业务数据。
+    :return: 返回完成读取、构建或转换后的结果。
+    """
     mapping = {
         "name":"名称",
         "goods_id":"商品ID",
@@ -174,9 +214,11 @@ def normalize_goods_key(goods_dict:Dict) -> Dict:
         new_k = mapping.get(k, k)
         new_data[new_k] = v
     return new_data
-
+##记录商品基础数据
 def load_goods_json() -> List[Dict]:
-    """货品基础数据json"""
+    """货品基础数据json。
+    :return: 返回完成读取、构建或转换后的结果。
+    """
     if not os.path.exists(GOODS_JSON_PATH):
         logger.warning(f"商品文件不存在 path={GOODS_JSON_PATH}")
         return []
@@ -190,8 +232,14 @@ def split_text(
     chunk_size: int = config.get("RAG", "chunk_size"),
     chunk_overlap: int = config.get("RAG", "chunk_overlap"),
 ) -> List[str]:
+    """按照长度和重叠窗口将长文本拆分为检索片段。
+    :param text: 需要处理、检索或格式化的文本。
+    :param chunk_size: 传入 ``chunk_size`` 的业务数据。
+    :param chunk_overlap: 传入 ``chunk_overlap`` 的业务数据。
+    :return: 返回函数处理得到的结果。
+    """
     chunks = []
-    start = 0
+    start = 0#记录字符，相当于路标=size-lop
     text_len = len(text)
     while start < text_len:
         end = min(start + chunk_size, text_len)
@@ -201,16 +249,28 @@ def split_text(
         start += (chunk_size - chunk_overlap)
     return chunks
 
-
+#入库前查重，避免重复插入相同片段，防止向量库重复数据
 def _collection_id_exists(chunk_id: str, target_collection=None) -> bool:
+    """检查指定编号是否已经存在于向量集合中。
+    :param chunk_id: 传入 ``chunk_id`` 的业务数据。
+    :param target_collection: 传入 ``target_collection`` 的业务数据。
+    :return: 返回函数处理得到的结果。
+    """
     target_collection = target_collection or collection
     if target_collection is None:
         return False
     data = target_collection.get(ids=[chunk_id])
     return bool(data.get("ids"))
 
-
+#批量准备要入库的文本片段，先逐个检查 ID 是否已经存在向量库，跳过已存在数据，只新增不存在的 chunk，避免重复入库；最终返回新增数量、跳过数量
 def _add_chunks_if_missing(documents: List[str], metadatas: List[Dict], ids: List[str], target_collection=None) -> tuple:
+    """执行 ``_add_chunks_if_missing`` 对应的项目处理逻辑。
+    :param documents: 传入 ``documents`` 的业务数据。
+    :param metadatas: 传入 ``metadatas`` 的业务数据。
+    :param ids: 传入 ``ids`` 的业务数据。
+    :param target_collection: 传入 ``target_collection`` 的业务数据。
+    :return: 返回函数处理得到的结果。
+    """
     target_collection = target_collection or collection
     added_docs = []
     added_metas = []
@@ -231,8 +291,12 @@ def _add_chunks_if_missing(documents: List[str], metadatas: List[Dict], ids: Lis
         )
     return len(added_ids), skipped
 
-
+#json文件也入库，整合文本模板，结构化字典 → 拼接成文本 → 切片
 def _goods_to_text(goods: Dict) -> str:
+    """执行 ``_goods_to_text`` 对应的项目处理逻辑。
+    :param goods: 商品数据记录。
+    :return: 返回函数处理得到的结果。
+    """
     return (
         f"商品名称：{goods['名称']}\n"
         f"商品ID：{goods['商品ID']}\n"
@@ -242,8 +306,12 @@ def _goods_to_text(goods: Dict) -> str:
         f"商品售价:{goods['售价']}\n"
     )
 
-
+#根据筛选条件（where）批量删除向量数据，返回删除条数
 def _delete_by_where(where: Dict) -> int:
+    """按照元数据条件删除向量集合中的记录。
+    :param where: 传入 ``where`` 的业务数据。
+    :return: 返回函数处理得到的结果。
+    """
     if collection is None:
         return 0
     data = collection.get(where=where)
@@ -252,8 +320,12 @@ def _delete_by_where(where: Dict) -> int:
         collection.delete(ids=ids)
     return len(ids)
 
-
+#修改向量库前先备份，出错可以恢复。
+# 通过将要修改的向量文本暂时存储在内存中，如果需要回退则重新向量化
 def _snapshot_collection() -> Dict:
+    """导出向量集合当前记录，供失败时恢复。
+    :return: 返回函数处理得到的结果。
+    """
     if collection is None:
         return {"ids": [], "documents": [], "metadatas": []}
     try:
@@ -261,8 +333,11 @@ def _snapshot_collection() -> Dict:
     except TypeError:
         return collection.get()
 
-
+#将暂存的数据重新向量化
 def _restore_collection_snapshot(snapshot: Dict) -> None:
+    """执行 ``_restore_collection_snapshot`` 对应的项目处理逻辑。
+    :param snapshot: 传入 ``snapshot`` 的业务数据。
+    """
     if collection is None:
         return
     _delete_by_where({"doc_type": "service_rule"})
@@ -276,6 +351,11 @@ def _restore_collection_snapshot(snapshot: Dict) -> None:
 
 # =====================【原有】政策文档入库 =====================
 def _build_vector_db_docs_for(target_collection, label: str):
+    """执行 ``_build_vector_db_docs_for`` 对应的项目处理逻辑。
+    :param target_collection: 传入 ``target_collection`` 的业务数据。
+    :param label: 用于日志或测试输出的说明标签。
+    :return: 返回完成读取、构建或转换后的结果。
+    """
     if target_collection is None:
         logger.error(f"{label} ChromaDB不可用，跳过政策文档入库")
         return (0, 0)
@@ -305,14 +385,25 @@ def _build_vector_db_docs_for(target_collection, label: str):
 
 
 def build_vector_db_docs():
+    """执行 ``build_vector_db_docs`` 对应的项目处理逻辑。
+    :return: 返回完成读取、构建或转换后的结果。
+    """
     return _build_vector_db_docs_for(collection, "primary-768")
 
 
 def build_vector_db_docs_384():
+    """执行 ``build_vector_db_docs_384`` 对应的项目处理逻辑。
+    :return: 返回完成读取、构建或转换后的结果。
+    """
     return _build_vector_db_docs_for(fallback_collection, "fallback-384")
 
 # =====================【新增】商品信息入库 =====================
 def _build_vector_db_goods_for(target_collection, label: str):
+    """执行 ``_build_vector_db_goods_for`` 对应的项目处理逻辑。
+    :param target_collection: 传入 ``target_collection`` 的业务数据。
+    :param label: 用于日志或测试输出的说明标签。
+    :return: 返回完成读取、构建或转换后的结果。
+    """
     if target_collection is None:
         logger.error(f"{label} ChromaDB不可用，跳过商品信息入库")
         return (0, 0)
@@ -346,14 +437,24 @@ def _build_vector_db_goods_for(target_collection, label: str):
 
 
 def build_vector_db_goods():
+    """执行 ``build_vector_db_goods`` 对应的项目处理逻辑。
+    :return: 返回完成读取、构建或转换后的结果。
+    """
     return _build_vector_db_goods_for(collection, "primary-768")
 
 
 def build_vector_db_goods_384():
+    """执行 ``build_vector_db_goods_384`` 对应的项目处理逻辑。
+    :return: 返回完成读取、构建或转换后的结果。
+    """
     return _build_vector_db_goods_for(fallback_collection, "fallback-384")
 
 
 def _is_meaningless_rag_query(query: str) -> bool:
+    """判断查询是否缺少可用于知识库检索的有效语义。
+    :param query: 传入 ``query`` 的业务数据。
+    :return: 条件成立时返回 ``True``，否则返回 ``False``。
+    """
     text = "" if query is None else str(query).strip()
     if not text:
         return True
@@ -369,10 +470,11 @@ def _is_meaningless_rag_query(query: str) -> bool:
 
 # =====================【改造】RAG检索入口，支持类型过滤 =====================
 def rag_search(query: str, top_k: int = 5, doc_type: str = None) -> List[Dict]:
-    """
-    :param query: 用户问题
-    :param top_k: 返回数量
-    :param doc_type: 过滤 "service_rule" / "goods_info"，不传则全部检索
+    """依次使用主向量库、备用向量库和关键词策略检索知识。
+    :param query: 传入 ``query`` 的业务数据。
+    :param top_k: 传入 ``top_k`` 的业务数据。
+    :param doc_type: 传入 ``doc_type`` 的业务数据。
+    :return: 返回函数处理得到的结果。
     """
     if _is_meaningless_rag_query(query):
         logger.warning(f"RAG输入被过滤 query={query}")
@@ -394,6 +496,12 @@ def rag_search(query: str, top_k: int = 5, doc_type: str = None) -> List[Dict]:
 
 
 def fallback_vector_search(query: str, top_k: int = 5, doc_type: str = None) -> List[Dict]:
+    """使用备用向量集合执行相似度检索。
+    :param query: 传入 ``query`` 的业务数据。
+    :param top_k: 传入 ``top_k`` 的业务数据。
+    :param doc_type: 传入 ``doc_type`` 的业务数据。
+    :return: 返回函数处理得到的结果。
+    """
     if fallback_collection is None:
         return rag_fallback_result()
     try:
@@ -406,6 +514,14 @@ def fallback_vector_search(query: str, top_k: int = 5, doc_type: str = None) -> 
 
 
 def _search_collection(target_collection, query: str, top_k: int, doc_type: str, label: str) -> List[Dict]:
+    """在指定向量集合中检索并整理相似文档。
+    :param target_collection: 传入 ``target_collection`` 的业务数据。
+    :param query: 传入 ``query`` 的业务数据。
+    :param top_k: 传入 ``top_k`` 的业务数据。
+    :param doc_type: 传入 ``doc_type`` 的业务数据。
+    :param label: 用于日志或测试输出的说明标签。
+    :return: 返回函数处理得到的结果。
+    """
     query_condition = {"query_texts": [query], "n_results": top_k}
     if doc_type is not None:
         query_condition["where"] = {"doc_type": doc_type}
@@ -444,6 +560,10 @@ def _search_collection(target_collection, query: str, top_k: int, doc_type: str,
 
 
 def update_single_goods_vector(goods_id: str) -> Dict:
+    """同步更新指定商品在主库和备用库中的向量记录。
+    :param goods_id: 商品的唯一编号。
+    :return: 返回函数处理得到的结果。
+    """
     if collection is None:
         logger.error(f"ChromaDB不可用，单商品向量更新失败 goods_id={goods_id}")
         return {"status": "fail", "msg": "ChromaDB不可用"}
@@ -481,6 +601,9 @@ def update_single_goods_vector(goods_id: str) -> Dict:
 
 
 def rebuild_all_vectors() -> Dict:
+    """重新构建主库和备用库的全部文档及商品向量。
+    :return: 返回函数处理得到的结果。
+    """
     if collection is None:
         logger.error("ChromaDB不可用，全量重建失败")
         return {"status": "fail", "msg": "ChromaDB不可用"}
@@ -512,6 +635,11 @@ def rebuild_all_vectors() -> Dict:
 
 
 def fallback_keyword_search(query: str, top_k: int = 5) -> List[Dict]:
+    """在向量检索不可用时使用关键词相关度检索。
+    :param query: 传入 ``query`` 的业务数据。
+    :param top_k: 传入 ``top_k`` 的业务数据。
+    :return: 返回函数处理得到的结果。
+    """
     candidates = _load_keyword_candidates()
     if not candidates:
         return rag_fallback_result()
@@ -558,6 +686,9 @@ def fallback_keyword_search(query: str, top_k: int = 5) -> List[Dict]:
 
 
 def _load_keyword_candidates() -> List[Dict]:
+    """整理商品与文档数据，生成关键词检索候选项。
+    :return: 返回完成读取、构建或转换后的结果。
+    """
     candidates = []
     for doc in load_all_docs(DOC_FOLDER_PATH):
         for idx, chunk in enumerate(split_text(doc["text"])):
@@ -585,6 +716,10 @@ def _load_keyword_candidates() -> List[Dict]:
 
 
 def _tokenize(text: str) -> List[str]:
+    """对中英文混合文本执行关键词检索分词。
+    :param text: 需要处理、检索或格式化的文本。
+    :return: 返回函数处理得到的结果。
+    """
     try:
         jieba = importlib.import_module("jieba")
         tokens = jieba.lcut(text)
@@ -607,7 +742,7 @@ def _tokenize(text: str) -> List[str]:
 
 # =====================【新增工具】清空商品向量（商品大量更新时使用） =====================
 def clear_all_goods_vector():
-    """删除所有doc_type=goods_info的数据，用于商品更新重建"""
+    """删除所有doc_type=goods_info的数据，用于商品更新重建。"""
     if collection is None:
         logger.error("ChromaDB不可用，跳过清空商品向量")
         return

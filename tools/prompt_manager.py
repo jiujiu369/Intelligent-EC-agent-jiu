@@ -36,6 +36,11 @@ PROMPT_TEMPLATES: Dict[str, object] = {
 
 
 def build_system_prompt(role: str, session_context: Optional[str] = None) -> str:
+    """根据基础模板和用户角色构建系统提示词。
+    :param role: 当前用户角色。
+    :param session_context: 传入 ``session_context`` 的业务数据。
+    :return: 返回完成读取、构建或转换后的结果。
+    """
     parts = [
         str(PROMPT_TEMPLATES["BASE_SYSTEM"]),
         get_role_description(role),
@@ -49,6 +54,10 @@ def build_system_prompt(role: str, session_context: Optional[str] = None) -> str
 
 
 def get_role_description(role: str) -> str:
+    """返回指定角色的业务职责说明。
+    :param role: 当前用户角色。
+    :return: 返回完成读取、构建或转换后的结果。
+    """
     role_key = {
         ROLE_CONSUMER: "ROLE_CONSUMER",
         ROLE_MERCHANT: "ROLE_MERCHANT",
@@ -57,6 +66,10 @@ def get_role_description(role: str) -> str:
 
 
 def get_error_message(error_type: str) -> str:
+    """读取并格式化指定类型的统一错误提示。
+    :param error_type: 传入 ``error_type`` 的业务数据。
+    :return: 返回完成读取、构建或转换后的结果。
+    """
     error_fallback = PROMPT_TEMPLATES["ERROR_FALLBACK"]
     if not isinstance(error_fallback, dict):
         return "系统走丢了，请重试"
@@ -64,6 +77,9 @@ def get_error_message(error_type: str) -> str:
 
 
 def _format_error_fallback() -> str:
+    """安全格式化错误提示模板，模板异常时返回原始文本。
+    :return: 返回函数处理得到的结果。
+    """
     error_fallback = PROMPT_TEMPLATES["ERROR_FALLBACK"]
     if not isinstance(error_fallback, dict):
         return ""

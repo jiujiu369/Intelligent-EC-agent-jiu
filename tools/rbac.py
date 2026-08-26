@@ -50,17 +50,18 @@ CONSUMER_MASKED_GOODS_FIELDS: Set[str] = {
 # ====================== 核心函数 ======================
 
 def get_allowed_tools(role: str) -> Set[str]:
-    """
-    获取指定角色允许使用的工具名称集合。
-    未知角色返回空集合（最小权限原则）。
+    """获取指定角色允许使用的工具名称集合。
+    :param role: 当前用户角色。
+    :return: 返回完成读取、构建或转换后的结果。
     """
     return ROLE_PERMISSIONS.get(role, set())
 
 
 def get_filtered_schemas(role: str, all_schemas: List[Dict]) -> List[Dict]:
-    """
-    【第一层防护】按角色过滤 Function Schema。
-    仅返回当前角色允许调用的工具定义，从源头阻止 LLM 生成越权工具调用。
+    """【第一层防护】按角色过滤 Function Schema。
+    :param role: 当前用户角色。
+    :param all_schemas: 待筛选的完整工具结构定义列表。
+    :return: 返回完成读取、构建或转换后的结果。
     """
     allowed = get_allowed_tools(role)
     return [
@@ -70,10 +71,10 @@ def get_filtered_schemas(role: str, all_schemas: List[Dict]) -> List[Dict]:
 
 
 def check_permission(func_name: str, role: str) -> bool:
-    """
-    【第二层防护】代码执行前的权限二次校验。
-    即使 LLM 绕过 Schema 限制生成了越权调用，此处也会拦截。
-    返回 True 表示允许执行，False 表示越权。
+    """【第二层防护】代码执行前的权限二次校验。
+    :param func_name: 工具或函数名称。
+    :param role: 当前用户角色。
+    :return: 条件成立时返回 ``True``，否则返回 ``False``。
     """
     allowed = func_name in get_allowed_tools(role)
     if not allowed:
@@ -82,16 +83,19 @@ def check_permission(func_name: str, role: str) -> bool:
 
 
 def get_permission_denied_msg(func_name: str, role: str) -> str:
-    """
-    生成权限不足的提示信息（返回给 LLM 作为 tool 执行结果）。
+    """生成权限不足的提示信息（返回给 LLM 作为 tool 执行结果）。
+    :param func_name: 工具或函数名称。
+    :param role: 当前用户角色。
+    :return: 返回完成读取、构建或转换后的结果。
     """
     return f"权限不足：当前角色[{role}]无权调用工具[{func_name}]。可用工具：{', '.join(sorted(get_allowed_tools(role)))}"
 
 
 def mask_goods_data(result: List[Dict], role: str) -> List[Dict]:
-    """
-    对 query_goods 的返回结果进行数据脱敏。
-    买家角色隐藏内部经营敏感字段（如上架状态），商家角色不脱敏。
+    """对 query_goods 的返回结果进行数据脱敏。
+    :param result: 工具调用或业务处理结果。
+    :param role: 当前用户角色。
+    :return: 返回函数处理得到的结果。
     """
     if role != ROLE_CONSUMER:
         return result
@@ -106,10 +110,11 @@ def mask_goods_data(result: List[Dict], role: str) -> List[Dict]:
 
 
 def mask_tool_result(func_name: str, result: Any, role: str) -> Any:
-    """
-    工具执行结果脱敏分发器。
-    根据工具名称和角色决定是否对返回数据做脱敏处理。
-    目前仅 query_goods 需要脱敏；后续扩展只需在此函数增加分支。
+    """工具执行结果脱敏分发器。
+    :param func_name: 工具或函数名称。
+    :param result: 工具调用或业务处理结果。
+    :param role: 当前用户角色。
+    :return: 返回函数处理得到的结果。
     """
     if func_name == "query_goods":
         return mask_goods_data(result, role)
@@ -117,8 +122,9 @@ def mask_tool_result(func_name: str, result: Any, role: str) -> Any:
 
 
 def get_role_prompt_suffix(role: str) -> str:
-    """
-    生成追加到系统提示词的角色信息，让 LLM 感知当前用户角色。
+    """生成追加到系统提示词的角色信息，让 LLM 感知当前用户角色。
+    :param role: 当前用户角色。
+    :return: 返回完成读取、构建或转换后的结果。
     """
     role_labels = {
         ROLE_CONSUMER: "买家（普通买家）",

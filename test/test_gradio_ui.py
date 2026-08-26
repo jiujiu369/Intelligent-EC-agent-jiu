@@ -15,6 +15,10 @@ _pass, _fail = 0, 0
 
 
 def _assert(condition, label):
+    """记录测试断言结果，并输出对应的通过或失败信息。
+    :param condition: 断言是否成立的布尔条件。
+    :param label: 用于日志或测试输出的说明标签。
+    """
     global _pass, _fail
     if condition:
         _pass += 1
@@ -25,6 +29,10 @@ def _assert(condition, label):
 
 
 def _run_case(label, fn):
+    """执行单个测试用例，并将异常转换为失败记录。
+    :param label: 用于日志或测试输出的说明标签。
+    :param fn: 需要调用、包装或测试的函数。
+    """
     try:
         fn()
     except Exception as exc:
@@ -32,16 +40,19 @@ def _run_case(label, fn):
 
 
 def test_ops_panel_only_visible_to_merchant():
+    """验证 ops panel only visible to merchant 场景符合预期行为。"""
     _assert(gradio_app.get_ops_panel_visible(ROLE_CONSUMER) is False, "买家看不到运维演示区")
     _assert(gradio_app.get_ops_panel_visible(ROLE_MERCHANT) is True, "商家可看到运维演示区")
 
 
 def test_chat_hint_mentions_help_and_menu():
+    """验证 chat hint mentions help and menu 场景符合预期行为。"""
     hint = gradio_app.build_chat_hint()
     _assert("帮助" in hint and "菜单" in hint, "聊天区置顶提示包含帮助和菜单")
 
 
 def test_help_and_menu_messages_do_not_require_login_or_llm():
+    """验证 help and menu messages do not require login or llm 场景符合预期行为。"""
     state = gradio_app.default_ui_state()
     help_result = gradio_app.handle_chat_message("帮助", state)
     menu_result = gradio_app.handle_chat_message("菜单", state)
@@ -53,6 +64,7 @@ def test_help_and_menu_messages_do_not_require_login_or_llm():
 
 
 def test_chatbot_history_uses_gradio_tuple_format():
+    """验证 chatbot history uses gradio tuple format 场景符合预期行为。"""
     history = [
         {"role": "user", "content": "查订单"},
         {"role": "assistant", "content": "请提供订单号"},
@@ -62,6 +74,7 @@ def test_chatbot_history_uses_gradio_tuple_format():
 
 
 def test_page_visibility_switches_after_login():
+    """验证 page visibility switches after login 场景符合预期行为。"""
     logged_out = gradio_app.get_page_visibility(False)
     logged_in = gradio_app.get_page_visibility(True)
 
@@ -70,6 +83,7 @@ def test_page_visibility_switches_after_login():
 
 
 def test_default_accounts_login_success():
+    """验证 default accounts login success 场景符合预期行为。"""
     buyer = gradio_app.handle_login("买家", "user1", "123456", gradio_app.default_ui_state())
     merchant = gradio_app.handle_login("商家", "admin", "admin123", gradio_app.default_ui_state())
 
@@ -78,11 +92,13 @@ def test_default_accounts_login_success():
 
 
 def test_register_validates_password_confirm():
+    """验证 register validates password confirm 场景符合预期行为。"""
     result = gradio_app.handle_register("买家", "new_ui_user", "pass1234", "pass9999")
     _assert(result["ok"] is False and "两次密码不一致" in result["message"], "注册校验确认密码")
 
 
 def test_custom_css_matches_reference_style():
+    """验证 custom css matches reference style 场景符合预期行为。"""
     css = gradio_app.build_app_css()
     _assert("#f7f8fb" in css, "页面使用浅灰背景")
     _assert(".login-card" in css and "max-width: 660px" in css, "登录卡片居中且宽度接近参考图")

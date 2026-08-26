@@ -33,6 +33,13 @@ class CloudLLMClient:
         timeout: int = 60,
         max_retry: int = 2
     ):
+        """初始化对象所需的状态和依赖。
+        :param api_key: 传入 ``api_key`` 的业务数据。
+        :param base_url: 传入 ``base_url`` 的业务数据。
+        :param model_name: 嵌入模型名称或模型路径。
+        :param timeout: 操作允许等待的最长秒数。
+        :param max_retry: 传入 ``max_retry`` 的业务数据。
+        """
         self.api_key = api_key
         self.base_url = base_url
         self.model_name = model_name
@@ -51,12 +58,12 @@ class CloudLLMClient:
         temperature: float = config.get("API", "temperature"),
         session_name: str = "-"
     ):
-        """
-        调用云端大模型对话接口，支持function call工具入参
-        :param messages: 对话历史消息列表
-        :param tools: tool_schemas工具列表（传入给LLM）
-        :param temperature: 温度，业务Agent建议0.1~0.3
-        :return: llm原始返回json
+        """调用云端大模型对话接口，支持function call工具入参。
+        :param messages: 传入 ``messages`` 的业务数据。
+        :param tools: 传入 ``tools`` 的业务数据。
+        :param temperature: 传入 ``temperature`` 的业务数据。
+        :param session_name: 用于隔离上下文的会话名称。
+        :return: 返回函数处理得到的结果。
         """
         payload = {
             "model": self.model_name,
@@ -166,6 +173,10 @@ class CloudLLMClient:
 
 
 def _parse_retry_after(headers: Dict) -> int:
+    """解析服务端返回的重试等待时间。
+    :param headers: 传入 ``headers`` 的业务数据。
+    :return: 返回函数处理得到的结果。
+    """
     try:
         return max(0, int(headers.get("Retry-After", 1)))
     except (TypeError, ValueError):
@@ -173,10 +184,20 @@ def _parse_retry_after(headers: Dict) -> int:
 
 
 def _estimate_tokens(payload) -> int:
+    """估算消息内容消耗的令牌数量。
+    :param payload: 传入 ``payload`` 的业务数据。
+    :return: 返回函数处理得到的结果。
+    """
     return max(1, len(json.dumps(payload, ensure_ascii=False)) // 4)
 
 
 def _safe_request_log(base_url: str, payload: Dict, timeout: int) -> Dict:
+    """过滤请求日志中的敏感或不可序列化数据。
+    :param base_url: 传入 ``base_url`` 的业务数据。
+    :param payload: 传入 ``payload`` 的业务数据。
+    :param timeout: 操作允许等待的最长秒数。
+    :return: 返回函数处理得到的结果。
+    """
     return {
         "url": f"{base_url}/chat/completions",
         "headers": {"Authorization": "Bearer ***", "Content-Type": "application/json"},
