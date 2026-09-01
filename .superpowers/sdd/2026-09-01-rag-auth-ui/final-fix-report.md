@@ -136,3 +136,46 @@ git diff --check
 - 找回密码限流按评审要求是最小进程内实现；应用进程重启会清空计数，多进程间不共享状态。这是本地单进程 UI 的已知边界，若未来改为多实例服务需迁移到共享存储。
 - 按 findings 的测试安全约束未启动 Gradio 服务器、未做浏览器视觉验收；事件绑定和返回基数由导入期 fake Gradio 契约测试覆盖。
 - 当前工作树不存在 `test/test_docstrings.py`，因此额外的文档字符串检查命令不可用；指定文件的 `py_compile` 已通过。
+
+## 追加修复：单库快照失败隔离
+
+追加生产/测试提交：`74e9e49c5fc7babae322d959072145bcb0efb4c7`。
+
+### 问题与修复
+
+- 问题：`_rebuild_collection()` 在进入原有 `try` 前调用 `_snapshot_collection()`；任一集合的快照 `get()` 抛异常会直接中断 `rebuild_all_vectors()`，另一集合无法继续。
+- 修复：单独捕获快照异常，记录带库标签的错误日志并返回该库 `{"status": "fail", "msg": "快照失败：..."}`。
+- 数据安全：快照失败后立即返回；不会删除该库数据，也不会在没有有效快照时调用回滚。
+- 双库隔离：`rebuild_all_vectors()` 继续调用另一库；一库快照失败、另一库成功时整体返回 `partial`，并保留 `primary` / `fallback` 独立结果。
+
+### TDD RED
+
+生产代码修改前执行：
+
+```powershell
+F:\code\project1\.venv\Scripts\python.exe test\test_rag_vector_maintenance.py
+```
+
+输出摘要：`通过: 21 失败: 3 总计: 24`，退出码 1。失败证明主库快照异常仍被抛出、结果不可诊断且备用库没有执行；同时受影响主库原数据保持不变。
+
+### GREEN 与验证
+
+```powershell
+F:\code\project1\.venv\Scripts\python.exe test\test_rag_vector_maintenance.py
+F:\code\project1\.venv\Scripts\python.exe test\test_rag_pipeline_fallback.py
+F:\code\project1\.venv\Scripts\python.exe -m py_compile embedding\rag_pipeline.py test\test_rag_vector_maintenance.py
+git diff --check
+```
+
+输出摘要：
+
+- RAG 维护：`通过: 24 失败: 0 总计: 24`，退出码 0。
+- RAG 备用：`通过: 5 失败: 0 总计: 5`，退出码 0。
+- `py_compile`：退出码 0。
+- `git diff --check`：退出码 0；仅有 Windows LF→CRLF 提示。
+- 两份真实用户 JSON 的 SHA-256 仍与本报告基线一致。
+- `rag_vector_maintenance_*` 临时残留：0。
+
+### 追加修复残余顾虑
+
+- 无新增功能性顾虑；快照失败仅返回诊断，不尝试带风险的无快照重建或回滚。
