@@ -16,6 +16,11 @@ python web_ui.py
 """
 import os
 import sys
+import multiprocessing
+import queue
+import threading
+import time
+import uuid
 
 ROOT_PATH = os.path.abspath(os.path.dirname(__file__))
 if ROOT_PATH not in sys.path:
@@ -24,7 +29,6 @@ if ROOT_PATH not in sys.path:
 import gradio as gr
 
 from agent.main_agent import (
-    run_agent,
     list_sessions,
     clear_memory,
     clear_all_memory,
@@ -47,6 +51,7 @@ from tools.auth_login import (
     SECURITY_QUESTIONS,
 )
 from utils.logger import get_logger, set_console_logging_enabled
+from utils.chat_worker import run_agent_process
 from embedding import rag_pipeline
 
 HELP_TEXT = """已有对话 或 历史对话：    查看已有会话列表
@@ -94,6 +99,12 @@ MERCHANT_GUIDE = """### 🏪 商家使用说明
 set_console_logging_enabled(False)
 logger = get_logger(__name__)
 init_auth_files()
+
+CHAT_TIMEOUT_SECONDS = 45
+_CHAT_PROCESS_CONTEXT = multiprocessing.get_context("spawn")
+_CHAT_REQUEST_LOCK = threading.Lock()
+_ACTIVE_CHAT_REQUESTS = {}
+_CANCELLED_CHAT_REQUESTS = {}
 
 
 # ====================== 运维演示 ======================
@@ -371,11 +382,93 @@ def do_set_security_question(current_password, question, answer, state):
     return (_account_result(ok, message), *cleared)
 
 
-def chat_respond(message, history, state):
-    """发送消息，调用 Agent 获取回答。支持帮助/菜单快捷命令。
+def _terminate_chat_process(process):
+    """终止并回收仍在运行的 Agent 子进程。"""
+    if process is None:
+        return
+    if process.is_alive():
+        process.terminate()
+    process.join(timeout=1)
+    if process.is_alive() and hasattr(process, "kill"):
+        process.kill()
+        process.join(timeout=1)
+
+
+def _cancel_chat_request(request_id, message):
+    """记录取消原因，并终止请求对应的子进程。"""
+    if not request_id:
+        return
+    with _CHAT_REQUEST_LOCK:
+        _CANCELLED_CHAT_REQUESTS[request_id] = message
+        request = _ACTIVE_CHAT_REQUESTS.pop(request_id, None)
+    if request:
+        process, _ = request
+        _terminate_chat_process(process)
+
+
+def _cleanup_chat_request(request_id, process, result_queue):
+    """回收已完成请求，且不覆盖并发终止操作。"""
+    with _CHAT_REQUEST_LOCK:
+        current = _ACTIVE_CHAT_REQUESTS.get(request_id)
+        if current and current[0] is process:
+            _ACTIVE_CHAT_REQUESTS.pop(request_id, None)
+    _terminate_chat_process(process)
+    if result_queue is not None:
+        result_queue.close()
+        result_queue.join_thread()
+
+
+def _run_chat_in_subprocess(message, state, request_id):
+    """启动 Agent 子进程并等待回答、取消或总时限到达。"""
+    with _CHAT_REQUEST_LOCK:
+        cancelled_message = _CANCELLED_CHAT_REQUESTS.get(request_id)
+        if cancelled_message:
+            return None, cancelled_message
+        result_queue = _CHAT_PROCESS_CONTEXT.Queue()
+        process = _CHAT_PROCESS_CONTEXT.Process(
+            target=run_agent_process,
+            args=(
+                result_queue,
+                message,
+                state["session"],
+                state["role"],
+                state["username"],
+            ),
+            daemon=True,
+        )
+        process.start()
+        _ACTIVE_CHAT_REQUESTS[request_id] = (process, result_queue)
+
+    deadline = time.monotonic() + CHAT_TIMEOUT_SECONDS
+    try:
+        while True:
+            with _CHAT_REQUEST_LOCK:
+                cancelled_message = _CANCELLED_CHAT_REQUESTS.get(request_id)
+            if cancelled_message:
+                return None, cancelled_message
+            try:
+                result_type, payload = result_queue.get(timeout=0.05)
+                if result_type == "ok":
+                    return payload, None
+                return f"⚠️ 处理出错：{payload}", None
+            except queue.Empty:
+                pass
+            if time.monotonic() >= deadline:
+                timeout_message = "请求已超时（已超过45秒），已自动终止，这不是你的问题"
+                _cancel_chat_request(request_id, timeout_message)
+                return None, timeout_message
+            if not process.is_alive():
+                return "⚠️ 处理出错：Agent 子进程未返回结果", None
+    finally:
+        _cleanup_chat_request(request_id, process, result_queue)
+
+
+def chat_respond(message, history, state, request_id):
+    """发送消息，通过可终止子进程调用 Agent。支持帮助/菜单快捷命令。
     :param message: 用户输入或待处理的消息文本。
     :param history: 当前会话的历史消息。
     :param state: 界面保存的当前登录及会话状态。
+    :param request_id: 当前请求的唯一标识。
     :return: 返回函数处理得到的结果。
     """
     if not state or not state.get("username"):
@@ -391,12 +484,9 @@ def chat_respond(message, history, state):
         answer = f"📋 **可执行指令**\n\n{HELP_TEXT}"
     else:
         try:
-            answer = run_agent(
-                message,
-                session_name=state["session"],
-                current_role=state["role"],
-                current_username=state["username"],
-            )
+            answer, stopped_message = _run_chat_in_subprocess(message, state, request_id)
+            if stopped_message:
+                return history, "", stopped_message
         except Exception as e:
             answer = f"⚠️ 处理出错：{e}"
             logger.error(f"Web UI chat 异常: {e}")
@@ -406,6 +496,55 @@ def chat_respond(message, history, state):
         {"role": "assistant", "content": answer},
     ]
     return history, "", _status_text(state)
+
+
+def start_chat_request():
+    """切换为请求处理中状态并启动 45 秒计时器。
+    :return: 发送按钮、终止按钮和计时器的组件更新。
+    """
+    request_id = uuid.uuid4().hex
+    with _CHAT_REQUEST_LOCK:
+        _CANCELLED_CHAT_REQUESTS.pop(request_id, None)
+    return (
+        gr.update(visible=False),
+        gr.update(visible=True),
+        gr.update(active=True),
+        request_id,
+    )
+
+
+def finish_chat_request(request_id=""):
+    """请求结束后恢复发送按钮并停止计时器。
+    :return: 发送按钮、终止按钮和计时器的组件更新。
+    """
+    with _CHAT_REQUEST_LOCK:
+        _CANCELLED_CHAT_REQUESTS.pop(request_id, None)
+    return (
+        gr.update(visible=True),
+        gr.update(visible=False),
+        gr.update(active=False),
+    )
+
+
+def stop_chat_request(request_id="", timed_out=False):
+    """恢复发送状态，并返回手动终止或自动超时提示。
+    :param request_id: 当前请求的唯一标识。
+    :param timed_out: 是否由 45 秒计时器触发。
+    :return: 按钮、计时器和状态栏的组件更新。
+    """
+    message = (
+        "请求已超时（已超过45秒），已自动终止，这不是你的问题"
+        if timed_out
+        else "已终止当前请求"
+    )
+    _cancel_chat_request(request_id, message)
+    return (
+        gr.update(visible=True),
+        gr.update(visible=False),
+        gr.update(active=False),
+        message,
+        "",
+    )
 
 
 def new_session(new_name, state):
@@ -551,6 +690,10 @@ with gr.Blocks(title="电商客服 Agent") as demo:
                     scale=5, show_label=False, autofocus=True,
                 )
                 send_btn = gr.Button("发送", variant="primary", scale=1)
+                stop_btn = gr.Button("终止", variant="stop", scale=1, visible=False)
+            request_timer = gr.Timer(CHAT_TIMEOUT_SECONDS, active=False)
+            request_id = gr.State("")
+            timeout_flag = gr.State(True)
         # 右侧会话管理
         with gr.Column(scale=1, min_width=260):
             with gr.Accordion("📖 使用说明", open=True):
@@ -611,8 +754,53 @@ with gr.Blocks(title="电商客服 Agent") as demo:
         [recover_status, recover_answer, recover_new_password, recover_confirm_password],
     )
 
-    send_btn.click(chat_respond, [msg_box, chatbot, state], [chatbot, msg_box, status_bar])
-    msg_box.submit(chat_respond, [msg_box, chatbot, state], [chatbot, msg_box, status_bar])
+    chat_control_outputs = [send_btn, stop_btn, request_timer, request_id]
+    send_start_event = send_btn.click(
+        start_chat_request, outputs=chat_control_outputs, queue=False
+    )
+    send_chat_event = send_start_event.then(
+        chat_respond,
+        [msg_box, chatbot, state, request_id],
+        [chatbot, msg_box, status_bar],
+    )
+    send_chat_event.then(
+        finish_chat_request,
+        inputs=[request_id],
+        outputs=[send_btn, stop_btn, request_timer],
+        queue=False,
+    )
+
+    submit_start_event = msg_box.submit(
+        start_chat_request, outputs=chat_control_outputs, queue=False
+    )
+    submit_chat_event = submit_start_event.then(
+        chat_respond,
+        [msg_box, chatbot, state, request_id],
+        [chatbot, msg_box, status_bar],
+    )
+    submit_chat_event.then(
+        finish_chat_request,
+        inputs=[request_id],
+        outputs=[send_btn, stop_btn, request_timer],
+        queue=False,
+    )
+
+    chat_events = [send_chat_event, submit_chat_event]
+    stop_outputs = [send_btn, stop_btn, request_timer, status_bar, request_id]
+    stop_btn.click(
+        stop_chat_request,
+        inputs=[request_id],
+        outputs=stop_outputs,
+        cancels=chat_events,
+        queue=False,
+    )
+    request_timer.tick(
+        stop_chat_request,
+        inputs=[request_id, timeout_flag],
+        outputs=stop_outputs,
+        cancels=chat_events,
+        queue=False,
+    )
 
     new_btn.click(new_session, [new_name_box, state], [session_dropdown, chatbot, status_bar, state])
     switch_btn.click(switch_session, [session_dropdown, state], [chatbot, status_bar, state, session_dropdown])
