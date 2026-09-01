@@ -44,7 +44,7 @@ PATHS: Dict[str, Any] = {
     "datas_dir": "datas",
     "docs_dir": "datas/docs",
     "chroma_persist_dir": "datas/chroma_db",
-    "chroma_persist_dir_384": "datas/chroma_db_384",
+    "chroma_persist_dir_fallback": "datas/chroma_db_fallback_768",
     "agent_memory_dir": "agent_memory",
     "log_dir": "logs",
     "goods_json": "datas/货品基础数据.json",
@@ -57,7 +57,7 @@ PATHS: Dict[str, Any] = {
 
 RAG: Dict[str, Any] = {
     "embedding_model": _model_path("bge-base-zh-v1.5"),
-    "fallback_model": _model_path("paraphrase-multilingual-MiniLM-L12-v2"),
+    "fallback_model": _model_path("bge-base-zh-v1.5"),
     "chunk_size": 384,
     "chunk_overlap": 64,
     "distance_threshold": 1.5,
@@ -109,12 +109,17 @@ class Config:
         :param key: 用于定位配置、缓存或数据项的键。
         :return: 返回完成读取、构建或转换后的结果。
         """
+        explicit_env_names = {
+            ("RAG", "embedding_model"): "AGENT_RAG_PRIMARY_MODEL",
+            ("RAG", "fallback_model"): "AGENT_RAG_FALLBACK_MODEL",
+        }
         env_names = (
+            explicit_env_names.get((section, key)),
             f"AGENT_{key.upper()}",
             f"AGENT_{section}_{key.upper()}",
         )
         for env_name in env_names:
-            if env_name in os.environ:
+            if env_name and env_name in os.environ:
                 return os.environ[env_name]
         return None
 

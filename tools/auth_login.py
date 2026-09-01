@@ -13,6 +13,8 @@ import json
 import hashlib
 import os
 import sys
+import tempfile
+import time
 
 from typing import Tuple, Optional
 
@@ -45,6 +47,18 @@ MERCHANT_FILE = _resolve_project_path(config.get("PATHS", "merchant_users_json")
 
 ROLE_CONSUMER = "consumer"
 ROLE_MERCHANT = "merchant"
+
+SECURITY_QUESTIONS = (
+    "你的第一所学校名称是？",
+    "你的童年昵称是？",
+    "你最喜欢的城市是？",
+)
+
+RESET_PASSWORD_FAILURE_LIMIT = 3
+RESET_PASSWORD_COOLDOWN_SECONDS = 300
+_RESET_PASSWORD_FAILURE_MESSAGE = "用户名或安全问题答案错误"
+_RESET_PASSWORD_LOCK_MESSAGE = "找回请求暂时受限，请稍后重试"
+_reset_password_attempts = {}
 
 # 密码哈希参数
 HASH_ALGORITHM = "sha256"
@@ -103,6 +117,69 @@ def _constant_time_compare(a: str, b: str) -> bool:
     return result == 0
 
 
+def _normalize_security_answer(answer: str) -> str:
+    """规范化安全问题答案，避免大小写和首尾空格影响校验。
+    :param answer: 用户输入的安全问题答案。
+    :return: 返回规范化后的答案。
+    """
+    return (answer or "").strip().lower()
+
+
+def _validate_new_password(new_password: str, confirm_password: str) -> Tuple[bool, str]:
+    """校验新密码及确认密码。
+    :param new_password: 用户输入的新密码。
+    :param confirm_password: 用户再次确认的新密码。
+    :return: 返回校验是否通过及对应提示。
+    """
+    if new_password != confirm_password:
+        return False, "两次新密码不一致"
+    if not new_password:
+        return False, "新密码不能为空"
+    if len(new_password) < 4:
+        return False, "新密码至少需要 4 个字符"
+    return True, ""
+
+
+def _has_security_question(user_data: dict) -> bool:
+    """判断账户是否具有完整且受支持的安全问题配置。
+    :param user_data: 账户数据。
+    :return: 配置完整时返回 ``True``，否则返回 ``False``。
+    """
+    return (
+        user_data.get("security_question") in SECURITY_QUESTIONS
+        and bool(user_data.get("security_answer_hash"))
+        and bool(user_data.get("security_answer_salt"))
+    )
+
+
+def _reset_attempt_key(role: str, username: str) -> tuple:
+    """构建找回密码失败计数的角色隔离键。"""
+    return role, (username or "").strip()
+
+
+def _is_reset_attempt_locked(key: tuple, now: float) -> bool:
+    """判断找回密码尝试是否仍处于冷却期。"""
+    state = _reset_password_attempts.get(key)
+    if not state:
+        return False
+    locked_until = state.get("locked_until", 0.0)
+    if locked_until > now:
+        return True
+    if locked_until:
+        _reset_password_attempts.pop(key, None)
+    return False
+
+
+def _record_reset_failure(key: tuple, now: float) -> None:
+    """记录一次失败，并在达到上限时启动冷却。"""
+    state = _reset_password_attempts.setdefault(
+        key, {"failures": 0, "locked_until": 0.0}
+    )
+    state["failures"] += 1
+    if state["failures"] >= RESET_PASSWORD_FAILURE_LIMIT:
+        state["locked_until"] = now + RESET_PASSWORD_COOLDOWN_SECONDS
+
+
 # ====================== 文件初始化 ======================
 
 def init_auth_files() -> None:
@@ -150,6 +227,9 @@ def _load_users(role: str) -> dict:
     :return: 返回完成读取、构建或转换后的结果。
     """
     file_path = _get_user_file(role)
+    if file_path is None:
+        print(f"[ERROR] 无效角色，拒绝读取用户文件: {role}")
+        return {}
     try:
         with open(file_path, "r", encoding="utf-8") as f:
             return json.load(f)
@@ -168,26 +248,55 @@ def _save_users(role: str, users: dict) -> bool:
     :return: 返回函数处理得到的结果。
     """
     file_path = _get_user_file(role)
+    if file_path is None:
+        print(f"[ERROR] 无效角色，拒绝写入用户文件: {role}")
+        return False
+
+    temp_path = None
     try:
-        with open(file_path, "w", encoding="utf-8") as f:
+        directory = os.path.dirname(os.path.abspath(file_path))
+        fd, temp_path = tempfile.mkstemp(
+            prefix=".users_", suffix=".tmp", dir=directory
+        )
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
             json.dump(users, f, ensure_ascii=False, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(temp_path, file_path)
+        temp_path = None
         return True
     except Exception as e:
         print(f"[ERROR] 无法写入用户文件 {file_path}: {e}")
         return False
+    finally:
+        if temp_path and os.path.exists(temp_path):
+            try:
+                os.remove(temp_path)
+            except OSError:
+                pass
 
 
-def _get_user_file(role: str) -> str:
+def _get_user_file(role: str) -> Optional[str]:
     """获取角色对应的用户文件路径。
     :param role: 当前用户角色。
     :return: 返回完成读取、构建或转换后的结果。
     """
-    return CONSUMER_FILE if role == ROLE_CONSUMER else MERCHANT_FILE
+    if role == ROLE_CONSUMER:
+        return CONSUMER_FILE
+    if role == ROLE_MERCHANT:
+        return MERCHANT_FILE
+    return None
 
 
 # ====================== 账号注册 ======================
 
-def register_user(role: str, username: str, password: str) -> Tuple[bool, str]:
+def register_user(
+    role: str,
+    username: str,
+    password: str,
+    security_question: str,
+    security_answer: str,
+) -> Tuple[bool, str]:
     """注册新用户。
     :param role: 当前用户角色。
     :param username: 用户登录名。
@@ -207,6 +316,13 @@ def register_user(role: str, username: str, password: str) -> Tuple[bool, str]:
     if len(password) < 4:
         return False, "密码至少需要 4 个字符"
 
+    if security_question not in SECURITY_QUESTIONS:
+        return False, "安全问题不受支持"
+
+    normalized_answer = _normalize_security_answer(security_answer)
+    if not normalized_answer:
+        return False, "安全问题答案不能为空"
+
     # 用户名合法性校验
     for ch in username:
         if not (ch.isalnum() or ch == "_" or "\u4e00" <= ch <= "\u9fff"):
@@ -221,9 +337,13 @@ def register_user(role: str, username: str, password: str) -> Tuple[bool, str]:
 
     # -- 注册 --
     password_hash, salt = _hash_password(password)
+    answer_hash, answer_salt = _hash_password(normalized_answer)
     users[username] = {
         "password_hash": password_hash,
         "salt": salt,
+        "security_question": security_question,
+        "security_answer_hash": answer_hash,
+        "security_answer_salt": answer_salt,
         "created_at": _now_str(),
     }
 
@@ -231,6 +351,155 @@ def register_user(role: str, username: str, password: str) -> Tuple[bool, str]:
         return False, "注册失败：无法写入用户文件"
 
     return True, f"注册成功！角色: {role}，用户名: {username}"
+
+
+def get_security_question(role: str, username: str) -> Tuple[bool, str]:
+    """获取账户已设置的安全问题。
+    :param role: 当前用户角色。
+    :param username: 用户登录名。
+    :return: 返回查询是否成功及安全问题或提示。
+    """
+    if role not in (ROLE_CONSUMER, ROLE_MERCHANT):
+        return False, "无效角色"
+
+    user_data = _load_users(role).get((username or "").strip())
+    if user_data is None:
+        return False, "用户不存在"
+    if not _has_security_question(user_data):
+        return False, "该账号尚未设置安全问题"
+    return True, user_data["security_question"]
+
+
+def reset_password(
+    role: str,
+    username: str,
+    security_answer: str,
+    new_password: str,
+    confirm_password: str,
+) -> Tuple[bool, str]:
+    """通过安全问题答案重设密码。
+    :param role: 当前用户角色。
+    :param username: 用户登录名。
+    :param security_answer: 用户输入的安全问题答案。
+    :param new_password: 用户输入的新密码。
+    :param confirm_password: 用户再次确认的新密码。
+    :return: 返回重设是否成功及对应提示。
+    """
+    if role not in (ROLE_CONSUMER, ROLE_MERCHANT):
+        return False, "无效角色"
+    valid_password, message = _validate_new_password(new_password, confirm_password)
+    if not valid_password:
+        return False, message
+
+    username = (username or "").strip()
+    attempt_key = _reset_attempt_key(role, username)
+    now = time.monotonic()
+    if _is_reset_attempt_locked(attempt_key, now):
+        return False, _RESET_PASSWORD_LOCK_MESSAGE
+
+    users = _load_users(role)
+    user_data = users.get(username)
+    if user_data is None:
+        _record_reset_failure(attempt_key, now)
+        return False, _RESET_PASSWORD_FAILURE_MESSAGE
+    if not _has_security_question(user_data):
+        return False, "该账号尚未设置安全问题，无法找回密码"
+
+    normalized_answer = _normalize_security_answer(security_answer)
+    if not normalized_answer or not verify_password(
+        user_data["security_answer_hash"],
+        user_data["security_answer_salt"],
+        normalized_answer,
+    ):
+        _record_reset_failure(attempt_key, now)
+        return False, _RESET_PASSWORD_FAILURE_MESSAGE
+
+    password_hash, salt = _hash_password(new_password)
+    user_data["password_hash"] = password_hash
+    user_data["salt"] = salt
+    if not _save_users(role, users):
+        return False, "密码重设失败：无法写入用户文件"
+    _reset_password_attempts.pop(attempt_key, None)
+    return True, "密码重设成功"
+
+
+def change_password(
+    role: str,
+    username: str,
+    old_password: str,
+    new_password: str,
+    confirm_password: str,
+) -> Tuple[bool, str]:
+    """使用旧密码修改账户密码。
+    :param role: 当前用户角色。
+    :param username: 用户登录名。
+    :param old_password: 用户当前密码。
+    :param new_password: 用户输入的新密码。
+    :param confirm_password: 用户再次确认的新密码。
+    :return: 返回修改是否成功及对应提示。
+    """
+    if role not in (ROLE_CONSUMER, ROLE_MERCHANT):
+        return False, "无效角色"
+    valid_password, message = _validate_new_password(new_password, confirm_password)
+    if not valid_password:
+        return False, message
+
+    users = _load_users(role)
+    user_data = users.get((username or "").strip())
+    if user_data is None:
+        return False, "用户名或旧密码错误"
+    if not old_password or not verify_password(
+        user_data.get("password_hash", ""), user_data.get("salt", ""), old_password
+    ):
+        return False, "用户名或旧密码错误"
+
+    password_hash, salt = _hash_password(new_password)
+    user_data["password_hash"] = password_hash
+    user_data["salt"] = salt
+    if not _save_users(role, users):
+        return False, "密码修改失败：无法写入用户文件"
+    return True, "密码修改成功"
+
+
+def set_security_question(
+    role: str,
+    username: str,
+    current_password: str,
+    question: str,
+    answer: str,
+) -> Tuple[bool, str]:
+    """登录后为账户设置或更新安全问题。
+    :param role: 当前用户角色。
+    :param username: 用户登录名。
+    :param current_password: 用户当前密码。
+    :param question: 选定的安全问题。
+    :param answer: 用户输入的安全问题答案。
+    :return: 返回设置是否成功及对应提示。
+    """
+    if role not in (ROLE_CONSUMER, ROLE_MERCHANT):
+        return False, "无效角色"
+    if question not in SECURITY_QUESTIONS:
+        return False, "安全问题不受支持"
+    normalized_answer = _normalize_security_answer(answer)
+    if not normalized_answer:
+        return False, "安全问题答案不能为空"
+
+    users = _load_users(role)
+    user_data = users.get((username or "").strip())
+    if user_data is None:
+        return False, "用户名或当前密码错误"
+    if not current_password or not verify_password(
+        user_data.get("password_hash", ""), user_data.get("salt", ""), current_password
+    ):
+        return False, "用户名或当前密码错误"
+
+    answer_hash, answer_salt = _hash_password(normalized_answer)
+    user_data["security_question"] = question
+    user_data["security_answer_hash"] = answer_hash
+    user_data["security_answer_salt"] = answer_salt
+    if not _save_users(role, users):
+        return False, "安全问题设置失败：无法写入用户文件"
+    return True, "安全问题设置成功"
 
 
 # ====================== 登录校验 ======================
@@ -350,7 +619,20 @@ def auth_interactive() -> Tuple[Optional[str], Optional[str]]:
             print("  ❌ 两次密码不一致，注册失败")
             return auth_interactive()
 
-        ok, msg = register_user(role, username, password)
+        print("  请选择安全问题：")
+        for index, question in enumerate(SECURITY_QUESTIONS, start=1):
+            print(f"    {index}. {question}")
+        question_choice = input("  请输入问题编号 (1/2/3): ").strip()
+        try:
+            security_question = SECURITY_QUESTIONS[int(question_choice) - 1]
+        except (ValueError, IndexError):
+            print("  ❌ 无效安全问题，注册失败")
+            return auth_interactive()
+        security_answer = _getpass("  安全问题答案: ")
+
+        ok, msg = register_user(
+            role, username, password, security_question, security_answer
+        )
         if ok:
             print(f"  ✅ {msg}")
             return role, username
@@ -433,7 +715,13 @@ if __name__ == "__main__":
 
     # 4. 注册测试
     print("\n4. 注册功能测试...")
-    ok, msg = register_user(ROLE_CONSUMER, "test_reg_user", "pass1234")
+    ok, msg = register_user(
+        ROLE_CONSUMER,
+        "test_reg_user",
+        "pass1234",
+        SECURITY_QUESTIONS[0],
+        "test_answer",
+    )
     print(f"   注册 test_reg_user → {'✅' if ok else '❌'} {msg}")
     # 清理测试账号
     if ok:
