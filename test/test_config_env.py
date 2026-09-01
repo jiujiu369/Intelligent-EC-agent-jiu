@@ -18,22 +18,18 @@ class ConfigEnvironmentTests(unittest.TestCase):
     """验证主、备用 RAG 模型使用设计约定的环境变量。"""
 
     def test_primary_and_fallback_model_environment_variables_override_real_config(self):
-        """显式环境变量映射缺失时，真实配置重载不会返回两个覆盖值。"""
+        """模块加载后显式设置的模型环境变量覆盖当前配置。"""
+        reloaded = importlib.reload(config)
         overrides = {
             "AGENT_RAG_PRIMARY_MODEL": "test-primary-model",
             "AGENT_RAG_FALLBACK_MODEL": "test-fallback-model",
         }
         with patch.dict(os.environ, overrides, clear=False):
-            reloaded = importlib.reload(config)
             self.assertEqual(
                 reloaded.get("RAG", "embedding_model"), "test-primary-model"
             )
             self.assertEqual(
                 reloaded.get("RAG", "fallback_model"), "test-fallback-model"
             )
-
-        importlib.reload(config)
-
-
 if __name__ == "__main__":
     unittest.main(verbosity=2)

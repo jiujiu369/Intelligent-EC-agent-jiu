@@ -8,11 +8,11 @@
 
 | 模块 | 说明 |
 | --- | --- |
-| 登录与权限 | 买家、商家两种角色；工具 Schema 过滤与工具执行前二次鉴权。 |
+| 登录与权限 | 买家、商家两种角色；支持注册、登录、忘记/找回密码、登录后修改密码和设置安全问题。 |
 | 业务工具 | 商品、库存、订单查询；售后工单创建；商品更新；销售报表导出。 |
-| RAG | 主 768 维向量库、384 维备用向量库与关键词降级检索。 |
+| RAG | 主、备用两个独立的 768 维 BGE 向量库与关键词降级检索。 |
 | 会话 | 按 `role + username` 隔离会话；支持新建、切换、清空与超长会话摘要。 |
-| 界面 | CLI 入口与 Gradio 图形界面入口。 |
+| 界面 | CLI 与 Gradio 图形界面；买家、商家分别显示对应能力说明和示例，商家可查看运维状态。 |
 | 运行保障 | 环境变量配置、限流、缓存、日志、输入校验与 API 异常兜底。 |
 | 回答风险检测 | 基于工具返回字段和过度承诺词的规则检测，详见下文边界说明。 |
 
@@ -23,18 +23,18 @@
 | 买家 | `rag_search`、`query_goods`、`query_order`、`create_aftersale_ticket` |
 | 商家 | 买家全部工具，以及 `query_stock`、`update_goods`、`export_sales_report` |
 
-权限控制位于 `tools/rbac.py`：`get_filtered_schemas()` 按角色过滤 LLM 可见的 Function Schema，`check_permission()` 在工具执行前再次校验。买家商品查询结果会隐藏 `上架状态` 字段。
+权限控制位于 `tools/rbac.py`：`get_filtered_schemas()` 按角色过滤 LLM 可见的 Function Schema，`check_permission()` 在工具执行前再次校验。买家商品查询结果会隐藏 `上架状态` 字段；订单查询还会在工具执行层强制注入当前登录用户名作为 `用户ID`，因此买家只能查询自己的订单，商家可以查询全部订单。
 
 ## RAG 检索与降级
 
 实现位于 `embedding/rag_pipeline.py`。
 
 1. 优先查询 768 维主向量库（`datas/chroma_db`）。
-2. 主库异常或无结果时，尝试 384 维备用库（`datas/chroma_db_384`）。
+2. 主库异常或无结果时，尝试独立的 768 维备用库（`datas/chroma_db_fallback_768`）。
 3. 向量库可用但无结果或相似度过低时，尝试关键词降级检索。
 4. 两个向量库都不可用时，返回“暂未找到相关知识，建议联系人工客服”。
 
-主模型目录为 `models/bge-base-zh-v1.5`，备用模型目录为 `models/paraphrase-multilingual-MiniLM-L12-v2`。两个模型维度不同，必须使用独立 ChromaDB 目录。
+主模型与备用模型均为 `models/bge-base-zh-v1.5`（768 维），分别使用独立 ChromaDB 目录。
 
 ## 回答风险检测：适用范围与限制
 
@@ -82,7 +82,15 @@ $env:AGENT_BASE_URL="https://你的服务商地址/v1"
 $env:AGENT_MODEL_NAME="你的模型名"
 ```
 
-首次构建主向量库：
+配置主、备用嵌入模型（两者均使用 BGE 768 维模型）：
+
+```dotenv
+AGENT_RAG_EMBEDDING_MODEL=./models/bge-base-zh-v1.5
+AGENT_RAG_PRIMARY_MODEL=./models/bge-base-zh-v1.5
+AGENT_RAG_FALLBACK_MODEL=./models/bge-base-zh-v1.5
+```
+
+构建主、备用两个独立向量库：
 
 ```powershell
 python embedding\\rag_pipeline.py
@@ -95,12 +103,7 @@ python web_ui.py
 python agent\\main_agent.py
 ```
 
-Gradio 默认地址为 `http://127.0.0.1:7860`。需要改端口时：
-
-```powershell
-$env:GRADIO_SERVER_PORT="7861"
-python web_ui.py
-```
+Gradio 默认地址为 `http://127.0.0.1:7860`。
 
 首次使用请自行注册账号。账号文件位于 `datas/consumer_users.json` 与 `datas/merchant_users.json`，密码以 PBKDF2-SHA256 加盐哈希保存。
 
@@ -113,6 +116,7 @@ python web_ui.py
 | `AGENT_API_KEY` | `API.api_key` |
 | `AGENT_BASE_URL` | `API.base_url` |
 | `AGENT_MODEL_NAME` | `API.model_name` |
+| `AGENT_RAG_PRIMARY_MODEL` | `RAG.embedding_model` |
 | `AGENT_RAG_DISTANCE_THRESHOLD` | `RAG.distance_threshold` |
 | `AGENT_RAG_FALLBACK_MODEL` | `RAG.fallback_model` |
 
@@ -128,25 +132,15 @@ python web_ui.py
 
 ### 最近一次复现结果
 
-运行时间：2026-08-18；解释器：Python 3.14.6；命令：`.\\.venv\\Scripts\\python.exe run_all_test.py`。
+运行时间：2026-09-02；解释器：Python 3.14.6；命令：`.\\.venv\\Scripts\\python.exe run_all_test.py`。
 
 | 项目 | 结果 |
 | --- | --- |
-| 发现的测试脚本 | 20 |
-| 通过 | 16 |
-| 失败 | 4 |
-| `test_hallucination_checker.py` | 通过，5/5 断言通过；覆盖工具字段一致/不一致、过度承诺词和单会话风险统计。 |
+| 发现的测试脚本 | 23 |
+| 通过 | 23 |
+| 失败 | 0 |
 
-失败脚本及本次运行中观察到的原因：
-
-| 脚本 | 观察结果 |
-| --- | --- |
-| `test_auth.py` | 测试期望预置 `user1` / `admin`，但当前实现初始化空账号文件，导致断言和后续读取失败。 |
-| `test_config.py` | 当前配置的默认 `api_key` 不满足测试“不得包含硬编码密钥”的断言。 |
-| `test_gradio_ui.py` | 导入 `ui.gradio_app` 失败；当前仓库入口为根目录 `web_ui.py`。 |
-| `test_logging_integration.py` | 依赖 `user1` 登录成功的日志断言失败，受账号初始化行为影响。 |
-
-因此，当前测试结果只能表明上述 16 个脚本在该环境下通过；不应表述为“全量测试通过”。测试会写入部分本地状态文件，运行前请备份需要保留的本地账号、会话或业务数据。
+测试覆盖账号安全、买家/商家 RBAC、买家订单隔离、双 768 维向量库独立初始化与重建、配置优先级、UI 账号辅助逻辑、日志、限流和回答风险检测。测试会写入部分临时状态文件，运行前仍建议备份需要保留的本地账号、会话或业务数据。
 
 ## 目录结构
 

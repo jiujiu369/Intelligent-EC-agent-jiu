@@ -82,7 +82,7 @@ tool_schemas = [
         "type": "function",
         "function": {
             "name": "query_order",
-            "description": "查询订单信息，支持根据订单号、商品ID或下单时间范围查询",
+            "description": "查询订单信息。买家仅能查询自己的订单，商家可按订单号、商品ID或下单时间范围查询全部订单",
             "parameters": {
                 "type": "object",
                 "properties": {

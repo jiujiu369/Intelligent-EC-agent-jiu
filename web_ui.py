@@ -70,22 +70,22 @@ $env:AGENT_API_KEY="sk-..."
 
 CONSUMER_GUIDE = """### 👤 消费者使用说明
 
-- 查询订单、商品和物流信息
-- 创建和查询售后申请
-- 输入「帮助」查看会话管理命令
-- 可复制示例：`查询订单 ORD001`
-- 可复制示例：`查询 SP001 的商品信息`
-- 可复制示例：`为订单 ORD001 创建退货售后`
+- **商品查询**：查询商品信息，例如：`查询 SP001 的商品信息`
+- **订单查询**：仅查询当前账号自己的订单，例如：`查询 DD001`
+- **售后工单**：创建和查询自己的售后申请，例如：`为订单 DD001 创建退货售后`
+- **知识库查询**：解答售后政策、活动规则等问题，例如：`七天无理由退货有什么要求`
+- **会话管理**：输入 `帮助` 查看记忆和会话管理命令
 """
 
 MERCHANT_GUIDE = """### 🏪 商家使用说明
 
-- 查询和维护商品库存
-- 查询订单、售后和销售报表
-- 输入「帮助」查看会话管理命令
-- 可复制示例：`查询 SP001 的库存`
-- 可复制示例：`把 SP001 的售价改为 99 元`
-- 可复制示例：`导出本月销售报表`
+- **商品管理**：查询商品信息、修改价格/规格/上架状态等，例如：`把 SP001 的售价改为 99 元`
+- **库存查询**：查看商品库存数量，例如：`查询 SP001 的库存`
+- **订单查询**：根据订单号、商品或时间范围查询订单，例如：`查询 DD001`、`查询本月订单`
+- **售后工单**：创建和管理售后工单，例如：`查询待处理的售后工单`
+- **销售报表**：生成指定时间段的销售统计，例如：`导出本月销售报表`
+- **知识库查询**：解答售后政策、活动规则等问题，例如：`查询双十一活动规则`
+- **会话管理**：输入 `帮助` 查看记忆和会话管理命令
 - 运维面板：登录后展开「运维演示」，点击`刷新运维面板`查看双库状态
 """
 
@@ -112,21 +112,26 @@ def refresh_ops_panel(state):
     fallback_ok = not rag_pipeline.fallback_chroma_connection_failed and rag_pipeline.fallback_collection is not None
 
     lines.append("### 📊 向量库状态")
-    lines.append(f"- **主库 (768维)**: {'✅ 正常' if primary_ok else '❌ 不可用'}")
-    lines.append(f"- **备用库 (768维)**: {'✅ 正常' if fallback_ok else '❌ 不可用'}")
+    primary_count = None
+    fallback_count = None
 
     if primary_ok:
         try:
-            count = rag_pipeline.collection.count()
-            lines.append(f"  - 主库向量数: {count}")
+            primary_count = rag_pipeline.collection.count()
         except Exception:
             pass
     if fallback_ok:
         try:
-            count = rag_pipeline.fallback_collection.count()
-            lines.append(f"  - 备用库向量数: {count}")
+            fallback_count = rag_pipeline.fallback_collection.count()
         except Exception:
             pass
+
+    primary_status = "✅ 正常" if primary_ok and primary_count else "⚠️ 未入库" if primary_ok else "❌ 不可用"
+    fallback_status = "✅ 正常" if fallback_ok and fallback_count else "⚠️ 未入库" if fallback_ok else "❌ 不可用"
+    primary_count_text = f"，{primary_count} 条向量" if primary_count is not None else ""
+    fallback_count_text = f"，{fallback_count} 条向量" if fallback_count is not None else ""
+    lines.append(f"- **主库**: {primary_status}（768 维{primary_count_text}）")
+    lines.append(f"- **备用库**: {fallback_status}（768 维{fallback_count_text}）")
 
     api_key = config.get("API", "api_key")
     lines.append("")
@@ -146,8 +151,10 @@ def refresh_ops_panel(state):
     lines.append(f"- 分块大小: {config.get('RAG', 'chunk_size')}")
     lines.append(f"- 重叠: {config.get('RAG', 'chunk_overlap')}")
     lines.append(f"- 距离阈值: {config.get('RAG', 'distance_threshold')}")
-    lines.append("- 主模型: bge-base-zh-v1.5 (768 维)")
-    lines.append("- 备用模型: bge-base-zh-v1.5 (768 维)")
+    primary_model = os.path.basename(os.path.normpath(config.get("RAG", "embedding_model")))
+    fallback_model = os.path.basename(os.path.normpath(config.get("RAG", "fallback_model")))
+    lines.append(f"- 主模型: {primary_model} (768 维)")
+    lines.append(f"- 备用模型: {fallback_model} (768 维)")
 
     return "\n".join(lines)
 

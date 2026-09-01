@@ -156,7 +156,7 @@ class WebUiAccountHelperTests(unittest.TestCase):
         self.assertIn("售后", consumer_guide)
         self.assertIn("库存", merchant_guide)
         self.assertIn("销售报表", merchant_guide)
-        self.assertIn("查询订单 ORD001", consumer_guide)
+        self.assertIn("查询 DD001", consumer_guide)
         self.assertIn("把 SP001 的售价改为 99 元", merchant_guide)
         self.assertIn("刷新运维面板", merchant_guide)
 

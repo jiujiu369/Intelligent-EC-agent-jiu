@@ -144,9 +144,10 @@ try:
     }]
 
     failures = 0
+    resolved_bge_path = os.path.join(ROOT_PATH, "models/bge-base-zh-v1.5")
     failures += _assert(init_calls == [
-        ("models/bge-base-zh-v1.5", primary_path, "customer_service_docs", "primary-768"),
-        ("models/bge-base-zh-v1.5", fallback_path, "customer_service_docs_fallback_768", "fallback-768"),
+        (resolved_bge_path, primary_path, "customer_service_docs", "primary-768"),
+        (resolved_bge_path, fallback_path, "customer_service_docs_fallback_768", "fallback-768"),
     ], "主、备用 RAG 使用独立的 768 维集合初始化")
 
     has_fallback_builders = all(hasattr(module, name) for name in [

@@ -137,16 +137,20 @@ def query_order(
     goods_id: Optional[str] = None,
     start_time: Optional[str] = None,
     end_time: Optional[str] = None,
+    user_id: Optional[str] = None,
 ) -> List[Dict]:
     """查询订单。
     :param order_id: 传入 ``order_id`` 的业务数据。
     :param goods_id: 商品的唯一编号。
     :param start_time: 传入 ``start_time`` 的业务数据。
     :param end_time: 传入 ``end_time`` 的业务数据。
+    :param user_id: 买家用户 ID；传入时仅返回该买家的订单。
     :return: 返回完成读取、构建或转换后的结果。
     """
     res = []
     for order in _order_data:
+        if user_id and str(order.get("用户ID", "")).upper() != str(user_id).upper():
+            continue
         if order_id and order.get("订单号") != order_id:
             continue
         if goods_id and str(order.get("商品ID", "")).upper() != str(goods_id).upper():

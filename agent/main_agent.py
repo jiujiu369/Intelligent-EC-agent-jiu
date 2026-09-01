@@ -448,6 +448,8 @@ def _run_agent(user_query: str, session_name: str = DEFAULT_SESSION,
                 tool_content = f"错误：不存在工具 {func_name}"
             else:
                 try:
+                    if func_name == "query_order" and current_role == ROLE_CONSUMER:
+                        func_args["user_id"] = current_username
                     # 执行工具
                     tool_return = target_func(**func_args)
                     # 【数据脱敏】按角色对工具返回结果做脱敏处理

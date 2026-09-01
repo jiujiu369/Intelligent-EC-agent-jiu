@@ -35,14 +35,25 @@ with tempfile.TemporaryDirectory() as tmpdir:
     logger_module = importlib.reload(logger_module)
     logger_module._reset_for_tests()
 
-    from tools.auth_login import ROLE_CONSUMER, login_user
+    import tools.auth_login as auth_login
     from tools.rbac import check_permission
     from tools import data_loader
 
-    login_user(ROLE_CONSUMER, "user1", "123456")
-    login_user(ROLE_CONSUMER, "user1", "wrong_password")
-    check_permission("update_goods", ROLE_CONSUMER)
+    original_consumer_file = auth_login.CONSUMER_FILE
+    auth_login.CONSUMER_FILE = os.path.join(tmpdir, "consumer_users.json")
+    auth_login.init_auth_files()
+    auth_login.register_user(
+        auth_login.ROLE_CONSUMER,
+        "user1",
+        "safe_test_password",
+        auth_login.SECURITY_QUESTIONS[0],
+        "safe_test_answer",
+    )
+    auth_login.login_user(auth_login.ROLE_CONSUMER, "user1", "safe_test_password")
+    auth_login.login_user(auth_login.ROLE_CONSUMER, "user1", "wrong_password")
+    check_permission("update_goods", auth_login.ROLE_CONSUMER)
     data_loader.load_json(data_loader.GOODS_PATH)
+    auth_login.CONSUMER_FILE = original_consumer_file
 
     log_path = os.path.join(tmpdir, f"{date.today().isoformat()}.log")
     with open(log_path, "r", encoding="utf-8") as f:
@@ -50,7 +61,7 @@ with tempfile.TemporaryDirectory() as tmpdir:
 
     failures += _assert("登录成功 role=consumer username=user1" in content, "登录成功写入日志")
     failures += _assert("登录失败 reason=user_or_password_error role=consumer username=user1" in content, "登录失败写入日志")
-    failures += _assert("123456" not in content and "wrong_password" not in content, "日志不记录密码明文")
+    failures += _assert("safe_test_password" not in content and "wrong_password" not in content, "日志不记录密码明文")
     failures += _assert("越权拦截 role=consumer tool=update_goods" in content, "RBAC 越权写入 WARNING 日志")
     failures += _assert("JSON读取 path=" in content and "货品基础数据.json" in content, "data_loader JSON 读取写入日志")
 

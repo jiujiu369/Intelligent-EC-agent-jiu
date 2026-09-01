@@ -341,6 +341,18 @@ def _snapshot_collection(target_collection=None) -> Dict:
     except TypeError:
         return target_collection.get()
 
+
+def _delete_all_collection_records(target_collection) -> int:
+    """删除目标集合的全部记录，包括旧版本缺少 doc_type 的记录。
+    :param target_collection: 需要清空的目标向量集合。
+    :return: 返回删除的向量记录数量。
+    """
+    data = target_collection.get()
+    ids = data.get("ids", [])
+    if ids:
+        target_collection.delete(ids=ids)
+    return len(ids)
+
 #将暂存的数据重新向量化
 def _restore_collection_snapshot(snapshot: Dict, target_collection=None) -> None:
     """执行 ``_restore_collection_snapshot`` 对应的项目处理逻辑。
@@ -351,8 +363,7 @@ def _restore_collection_snapshot(snapshot: Dict, target_collection=None) -> None
         target_collection = collection
     if target_collection is None:
         return
-    _delete_by_where({"doc_type": "service_rule"}, target_collection)
-    _delete_by_where({"doc_type": "goods_info"}, target_collection)
+    _delete_all_collection_records(target_collection)
     ids = snapshot.get("ids", [])
     documents = snapshot.get("documents", [])
     metadatas = snapshot.get("metadatas", [])
@@ -654,8 +665,7 @@ def _rebuild_collection(target_collection, label: str) -> Dict:
         logger.error(f"{label} 全量重建快照失败 error={e}")
         return {"status": "fail", "msg": f"快照失败：{e}"}
     try:
-        _delete_by_where({"doc_type": "service_rule"}, target_collection)
-        _delete_by_where({"doc_type": "goods_info"}, target_collection)
+        _delete_all_collection_records(target_collection)
         docs_added, docs_skipped = _build_vector_db_docs_for(
             target_collection, label
         )

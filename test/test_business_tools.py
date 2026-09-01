@@ -107,9 +107,13 @@ def test_query_order():
     by_order = query_order(order_id=order_id)
     by_goods = query_order(goods_id=goods_id)
     by_time = query_order(start_time="2026-06-01", end_time="2026-06-30")
+    buyer_orders = query_order(user_id=first["用户ID"])
+    other_buyer_order = query_order(order_id=order_id, user_id="NO_SUCH_USER")
     _assert(isinstance(by_order, list) and by_order and by_order[0]["订单号"] == order_id, "query_order 订单号查询")
     _assert(isinstance(by_goods, list) and any(item["商品ID"] == goods_id for item in by_goods), "query_order 商品 ID 查询")
     _assert(isinstance(by_time, list), "query_order 时间筛选返回列表")
+    _assert(buyer_orders and all(item["用户ID"] == first["用户ID"] for item in buyer_orders), "query_order 按买家用户 ID 隔离")
+    _assert(isinstance(other_buyer_order, dict) and other_buyer_order.get("msg"), "query_order 拒绝买家查询他人订单")
 
 
 def test_create_aftersale_ticket():

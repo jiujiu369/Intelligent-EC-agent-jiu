@@ -7,7 +7,7 @@ try:
 
     _env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
     if os.path.exists(_env_path):
-        load_dotenv(_env_path)
+        load_dotenv(_env_path, override=True)
 except ImportError:
     pass
 
@@ -33,8 +33,8 @@ def _model_path(relative: str) -> str:
 
 API: Dict[str, Any] = {
     "api_key": "",
-    "base_url": "https://apihub.agnes-ai.com/v1",
-    "model_name": "agnes-2.0-flash",
+    "base_url": "https://api.apikl.ai/v1",
+    "model_name": "gpt-5.5",
     "timeout": 60,
     "max_retry": 2,
     "temperature": 0.1,

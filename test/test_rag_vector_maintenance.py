@@ -234,8 +234,10 @@ try:
 
         rag.collection.items["old_policy"] = {"document": "old", "metadata": {"doc_type": "service_rule"}}
         rag.collection.items["external_keep"] = {"document": "external", "metadata": {"doc_type": "external"}}
+        rag.collection.items["legacy_without_type"] = {"document": "legacy", "metadata": {}}
         rag.fallback_collection.items["old_policy"] = {"document": "old", "metadata": {"doc_type": "service_rule"}}
         rag.fallback_collection.items["external_keep"] = {"document": "external", "metadata": {"doc_type": "external"}}
+        rag.fallback_collection.items["legacy_without_type"] = {"document": "legacy", "metadata": {}}
         rag.collection.fail_add = True
         rebuild_result = rag.rebuild_all_vectors()
         failures += _assert(rebuild_result["status"] == "partial", "单库重建异常时返回部分失败")
@@ -253,8 +255,9 @@ try:
             "主库失败时备用库仍独立完成重建",
         )
         failures += _assert(
-            "external_keep" in rag.fallback_collection.items,
-            "备用库重建保留非 RAG 向量",
+            "external_keep" not in rag.fallback_collection.items
+            and "legacy_without_type" not in rag.fallback_collection.items,
+            "备用库全量重建清除旧结构残留向量",
         )
 
         clear_result = rag.clear_all_goods_vector()
