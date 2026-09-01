@@ -6,7 +6,7 @@ import tempfile
 
 ROOT_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if ROOT_PATH not in sys.path:
-    sys.path.append(ROOT_PATH)
+    sys.path.insert(0, ROOT_PATH)
 
 import run_all_test
 
@@ -15,6 +15,7 @@ _pass, _fail = 0, 0
 
 
 def _assert(condition, label):
+    """记录测试断言结果。"""
     global _pass, _fail
     if condition:
         _pass += 1
@@ -25,6 +26,7 @@ def _assert(condition, label):
 
 
 def test_discover_tests_sorted():
+    """验证只发现 test*.py 并按文件名排序。"""
     with tempfile.TemporaryDirectory() as tmpdir:
         test_dir = os.path.join(tmpdir, "test")
         os.makedirs(test_dir, exist_ok=True)
@@ -36,6 +38,7 @@ def test_discover_tests_sorted():
 
 
 def test_run_test_file_status():
+    """验证子测试脚本退出码会转换为 PASS 或 FAIL。"""
     with tempfile.TemporaryDirectory() as tmpdir:
         pass_file = os.path.join(tmpdir, "test_pass.py")
         fail_file = os.path.join(tmpdir, "test_fail.py")

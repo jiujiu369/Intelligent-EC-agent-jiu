@@ -13,12 +13,14 @@ TEST_DIR = PROJECT_ROOT / "test"
 
 
 def _configure_output() -> None:
+    """配置测试运行时的终端字符编码。"""
     for stream in (sys.stdout, sys.stderr):
         if hasattr(stream, "reconfigure"):
             stream.reconfigure(errors="replace")
 
 
 def discover_tests(test_dir: Optional[os.PathLike] = None) -> List[Path]:
+    """按稳定顺序发现目录中的 test*.py 测试脚本。"""
     target_dir = Path(test_dir) if test_dir is not None else TEST_DIR
     if not target_dir.exists():
         return []
@@ -29,6 +31,7 @@ def discover_tests(test_dir: Optional[os.PathLike] = None) -> List[Path]:
 
 
 def run_test_file(test_file: os.PathLike, cwd: Optional[os.PathLike] = None) -> Dict[str, object]:
+    """在独立子进程中运行单个测试脚本并收集结果。"""
     path = Path(test_file)
     workdir = Path(cwd) if cwd is not None else PROJECT_ROOT
     env = os.environ.copy()
@@ -57,6 +60,7 @@ def run_test_file(test_file: os.PathLike, cwd: Optional[os.PathLike] = None) -> 
 
 
 def print_result(result: Dict[str, object]) -> None:
+    """打印单个测试脚本的运行结果。"""
     print("=" * 70)
     print(f"[{result['status']}] {result['name']}  耗时: {result['duration']}s")
     print("=" * 70)
@@ -70,6 +74,7 @@ def print_result(result: Dict[str, object]) -> None:
 
 
 def main() -> int:
+    """发现并依次执行全部测试，最后输出汇总。"""
     _configure_output()
     tests = discover_tests(TEST_DIR)
     if not tests:
