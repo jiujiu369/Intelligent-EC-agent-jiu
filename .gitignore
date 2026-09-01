@@ -2,6 +2,8 @@
 datas/chroma_db/
 datas/chroma_db_384/
 datas/chroma_db_fallback_768/
+datas/chroma_db_512/
+datas/chroma_db_fallback_512/
 
 # Codex/Superpowers 隔离工作区
 .worktrees/

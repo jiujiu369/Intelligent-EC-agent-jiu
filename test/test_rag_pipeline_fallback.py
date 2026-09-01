@@ -1,4 +1,4 @@
-# RAG 主、备用 768 维库测试：初始化隔离且备用入库仅写入备用集合
+# RAG 主、备用 512 维库测试：两个集合共用一个小模型实例
 import importlib.util
 import os
 import sys
@@ -39,12 +39,15 @@ class FakeEmbeddingFunction:
 
     def __init__(self, model_name):
         self.model_name = model_name
+        embedding_instances.append(self)
 
 
-primary_path = os.path.abspath("isolated-primary-768")
-fallback_path = os.path.abspath("isolated-fallback-768")
+primary_path = os.path.abspath("isolated-primary-512")
+fallback_path = os.path.abspath("isolated-fallback-512")
 init_calls = []
 init_labels = []
+embedding_instances = []
+collection_embedding_functions = []
 collections = {}
 
 
@@ -58,8 +61,8 @@ def _get_config(section, key, default=None):
         ("PATHS", "docs_dir"): "datas/docs",
         ("PATHS", "goods_json"): "datas/goods.json",
         ("PATHS", "log_dir"): "logs",
-        ("RAG", "embedding_model"): "models/bge-base-zh-v1.5",
-        ("RAG", "fallback_model"): "models/bge-base-zh-v1.5",
+        ("RAG", "embedding_model"): "BAAI/bge-small-zh-v1.5",
+        ("RAG", "fallback_model"): "BAAI/bge-small-zh-v1.5",
         ("RAG", "chunk_size"): 384,
         ("RAG", "chunk_overlap"): 64,
         ("RAG", "distance_threshold"): 1.5,
@@ -74,7 +77,8 @@ class FakeClient:
         self.path = path
 
     def get_or_create_collection(self, name, embedding_function):
-        init_calls.append((embedding_function.model_name, self.path, name, init_labels[len(init_calls)]))
+        init_calls.append((embedding_function.model_name, self.path, name))
+        collection_embedding_functions.append(embedding_function)
         return collections.setdefault(name, FakeCollection())
 
 
@@ -144,16 +148,21 @@ try:
     }]
 
     failures = 0
-    resolved_bge_path = os.path.join(ROOT_PATH, "models/bge-base-zh-v1.5")
+    resolved_bge_path = "BAAI/bge-small-zh-v1.5"
     failures += _assert(init_calls == [
-        (resolved_bge_path, primary_path, "customer_service_docs", "primary-768"),
-        (resolved_bge_path, fallback_path, "customer_service_docs_fallback_768", "fallback-768"),
-    ], "主、备用 RAG 使用独立的 768 维集合初始化")
+        (resolved_bge_path, primary_path, "customer_service_docs_512"),
+        (resolved_bge_path, fallback_path, "customer_service_docs_fallback_512"),
+    ], "主、备用 RAG 使用独立的 512 维集合初始化")
+    failures += _assert(
+        len(embedding_instances) == 1
+        and collection_embedding_functions[0] is collection_embedding_functions[1],
+        "两个 512 维集合只加载一次并共用同一个 embedding 实例",
+    )
 
     has_fallback_builders = all(hasattr(module, name) for name in [
         "build_vector_db_docs_fallback", "build_vector_db_goods_fallback",
     ])
-    failures += _assert(has_fallback_builders, "提供备用 768 维入库入口")
+    failures += _assert(has_fallback_builders, "提供备用 512 维入库入口")
     if has_fallback_builders:
         failures += _assert(module.build_vector_db_docs_fallback() == (1, 0), "备用政策文档入库返回统计")
         failures += _assert(module.build_vector_db_goods_fallback() == (1, 0), "备用商品入库返回统计")
@@ -169,5 +178,5 @@ finally:
             sys.modules[name] = saved_module
 
 print("=" * 60)
-print(f"  通过: {5 - failures} 失败: {failures} 总计: 5")
+print(f"  通过: {6 - failures} 失败: {failures} 总计: 6")
 raise SystemExit(1 if failures else 0)

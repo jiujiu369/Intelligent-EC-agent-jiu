@@ -28,8 +28,9 @@ CHROMA_PERSIST_PATH = os.path.join(PROJECT_ROOT, config.get("PATHS", "chroma_per
 FALLBACK_CHROMA_PERSIST_PATH = os.path.join(PROJECT_ROOT, config.get("PATHS", "chroma_persist_dir_fallback"))
 DOC_FOLDER_PATH = os.path.join(PROJECT_ROOT, config.get("PATHS", "docs_dir"))#项目数据地址
 GOODS_JSON_PATH = os.path.join(PROJECT_ROOT, config.get("PATHS", "goods_json")) # 新增商品json路径
-COLLECTION_NAME = "customer_service_docs"
-FALLBACK_COLLECTION_NAME = "customer_service_docs_fallback_768"
+COLLECTION_NAME = "customer_service_docs_512"
+FALLBACK_COLLECTION_NAME = "customer_service_docs_fallback_512"
+PRIMARY_MODEL_NAME = config.get("RAG", "embedding_model")
 FALLBACK_MODEL_NAME = config.get("RAG", "fallback_model")
 
 #=================加载本地embedding模型=====================
@@ -62,15 +63,23 @@ def _resolve_model_name(model_name: str) -> str:
     return model_name
 
 #=================初始化向量库：加载向量模型->创建持久化客户端->获取/新建向量库集合=======================
-def _init_chroma_collection(model_name: str, persist_path: str, collection_name: str, label: str):
+def _init_chroma_collection(
+    model_name: str,
+    persist_path: str,
+    collection_name: str,
+    label: str,
+    embedding_function=None,
+):
     """加载嵌入模型并连接或创建持久化向量集合。
     :param model_name: 嵌入模型名称或模型路径。
     :param persist_path: 向量数据库的持久化目录。
     :param collection_name: 向量集合名称。
     :param label: 用于日志或测试输出的说明标签。
+    :param embedding_function: 可选的共享 embedding 实例；为空时按模型名加载。
     :return: 返回函数处理得到的结果。
     """
-    embedding_function = _load_embedding_function(model_name, label)
+    if embedding_function is None:
+        embedding_function = _load_embedding_function(model_name, label)
     if embedding_function is None:
         return None, None, None, False
     try:# 优先使用本地模型，没有则下载
@@ -84,19 +93,25 @@ def _init_chroma_collection(model_name: str, persist_path: str, collection_name:
         logger.error(f"{label} ChromaDB连接异常 path={persist_path} error={e}")
         return embedding_function, None, None, True
 
-#=====bge主库==========
+#=====BGE small 512 维主库==========
 embedding_fn, chroma_client, collection, chroma_connection_failed = _init_chroma_collection(
-    config.get("RAG", "embedding_model"),
+    PRIMARY_MODEL_NAME,
     CHROMA_PERSIST_PATH,
     COLLECTION_NAME,
-    "primary-768",
+    "primary-512",
 )
-#=========bge备用库，主库加载失败则运行副库，两个都失效则兜底jieba关键词检索===============
+#=========相同模型时复用 embedding 实例，备用库失效则兜底 jieba 关键词检索===============
+shared_fallback_embedding_fn = (
+    embedding_fn
+    if _resolve_model_name(PRIMARY_MODEL_NAME) == _resolve_model_name(FALLBACK_MODEL_NAME)
+    else None
+)
 fallback_embedding_fn, fallback_chroma_client, fallback_collection, fallback_chroma_connection_failed = _init_chroma_collection(
     FALLBACK_MODEL_NAME,
     FALLBACK_CHROMA_PERSIST_PATH,
     FALLBACK_COLLECTION_NAME,
-    "fallback-768",
+    "fallback-512",
+    embedding_function=shared_fallback_embedding_fn,
 )
 
 # ===================== 文件读取函数 =====================
@@ -410,14 +425,14 @@ def build_vector_db_docs():
     """执行 ``build_vector_db_docs`` 对应的项目处理逻辑。
     :return: 返回完成读取、构建或转换后的结果。
     """
-    return _build_vector_db_docs_for(collection, "primary-768")
+    return _build_vector_db_docs_for(collection, "primary-512")
 
 
 def build_vector_db_docs_fallback():
-    """将政策文档写入备用 768 维向量集合。
+    """将政策文档写入备用 512 维向量集合。
     :return: 返回完成读取、构建或转换后的结果。
     """
-    return _build_vector_db_docs_for(fallback_collection, "fallback-768")
+    return _build_vector_db_docs_for(fallback_collection, "fallback-512")
 
 # =====================【新增】商品信息入库 =====================
 def _build_vector_db_goods_for(target_collection, label: str):
@@ -462,14 +477,14 @@ def build_vector_db_goods():
     """执行 ``build_vector_db_goods`` 对应的项目处理逻辑。
     :return: 返回完成读取、构建或转换后的结果。
     """
-    return _build_vector_db_goods_for(collection, "primary-768")
+    return _build_vector_db_goods_for(collection, "primary-512")
 
 
 def build_vector_db_goods_fallback():
-    """将商品信息写入备用 768 维向量集合。
+    """将商品信息写入备用 512 维向量集合。
     :return: 返回完成读取、构建或转换后的结果。
     """
-    return _build_vector_db_goods_for(fallback_collection, "fallback-768")
+    return _build_vector_db_goods_for(fallback_collection, "fallback-512")
 
 
 def _is_meaningless_rag_query(query: str) -> bool:
@@ -508,7 +523,7 @@ def rag_search(query: str, top_k: int = 5, doc_type: str = None) -> List[Dict]:
             return rag_fallback_result()
         return fallback_vector_search(query, top_k, doc_type)
     try:
-        filtered = _search_collection(collection, query, top_k, doc_type, "primary-768")
+        filtered = _search_collection(collection, query, top_k, doc_type, "primary-512")
         if not filtered:
             return fallback_vector_search(query, top_k, doc_type)
         return filtered
@@ -527,11 +542,11 @@ def fallback_vector_search(query: str, top_k: int = 5, doc_type: str = None) -> 
     if fallback_collection is None:
         return rag_fallback_result()
     try:
-        filtered = _search_collection(fallback_collection, query, top_k, doc_type, "fallback-768")
+        filtered = _search_collection(fallback_collection, query, top_k, doc_type, "fallback-512")
         if filtered:
             return filtered
     except Exception as e:
-        logger.error(f"fallback-768 RAG检索异常 query={query} top_k={top_k} error={e}")
+        logger.error(f"fallback-512 RAG检索异常 query={query} top_k={top_k} error={e}")
     return fallback_keyword_search(query, top_k)
 
 
@@ -634,10 +649,10 @@ def update_single_goods_vector(goods_id: str) -> Dict:
         return {"status": "fail", "msg": "商品不存在", "goods_id": goods_id}
 
     primary_result = _update_goods_in_collection(
-        collection, "primary-768", target_goods
+        collection, "primary-512", target_goods
     )
     fallback_result = _update_goods_in_collection(
-        fallback_collection, "fallback-768", target_goods
+        fallback_collection, "fallback-512", target_goods
     )
     successes = sum(
         result["status"] == "success"
@@ -699,8 +714,8 @@ def rebuild_all_vectors() -> Dict:
     docs_count = len(load_all_docs(DOC_FOLDER_PATH))
     goods_count = len(load_goods_json())
     logger.info(f"开始全量重建向量 docs={docs_count} goods={goods_count}")
-    primary_result = _rebuild_collection(collection, "primary-768")
-    fallback_result = _rebuild_collection(fallback_collection, "fallback-768")
+    primary_result = _rebuild_collection(collection, "primary-512")
+    fallback_result = _rebuild_collection(fallback_collection, "fallback-512")
     successes = sum(
         result["status"] == "success"
         for result in (primary_result, fallback_result)
@@ -841,8 +856,8 @@ def _clear_goods_in_collection(target_collection, label: str) -> Dict:
 
 def clear_all_goods_vector():
     """删除主、备用集合中所有 ``doc_type=goods_info`` 的数据。"""
-    primary_result = _clear_goods_in_collection(collection, "primary-768")
-    fallback_result = _clear_goods_in_collection(fallback_collection, "fallback-768")
+    primary_result = _clear_goods_in_collection(collection, "primary-512")
+    fallback_result = _clear_goods_in_collection(fallback_collection, "fallback-512")
     successes = sum(
         result["status"] == "success"
         for result in (primary_result, fallback_result)

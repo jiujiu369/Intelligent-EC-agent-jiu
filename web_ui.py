@@ -141,8 +141,8 @@ def refresh_ops_panel(state):
     fallback_status = "✅ 正常" if fallback_ok and fallback_count else "⚠️ 未入库" if fallback_ok else "❌ 不可用"
     primary_count_text = f"，{primary_count} 条向量" if primary_count is not None else ""
     fallback_count_text = f"，{fallback_count} 条向量" if fallback_count is not None else ""
-    lines.append(f"- **主库**: {primary_status}（768 维{primary_count_text}）")
-    lines.append(f"- **备用库**: {fallback_status}（768 维{fallback_count_text}）")
+    lines.append(f"- **主库**: {primary_status}（512 维{primary_count_text}）")
+    lines.append(f"- **备用库**: {fallback_status}（512 维{fallback_count_text}）")
 
     api_key = config.get("API", "api_key")
     lines.append("")
@@ -164,8 +164,8 @@ def refresh_ops_panel(state):
     lines.append(f"- 距离阈值: {config.get('RAG', 'distance_threshold')}")
     primary_model = os.path.basename(os.path.normpath(config.get("RAG", "embedding_model")))
     fallback_model = os.path.basename(os.path.normpath(config.get("RAG", "fallback_model")))
-    lines.append(f"- 主模型: {primary_model} (768 维)")
-    lines.append(f"- 备用模型: {fallback_model} (768 维)")
+    lines.append(f"- 主模型: {primary_model} (512 维)")
+    lines.append(f"- 备用模型: {fallback_model} (512 维，共用实例)")
 
     return "\n".join(lines)
 

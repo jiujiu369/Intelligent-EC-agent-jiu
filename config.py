@@ -28,7 +28,7 @@ def _model_path(relative: str) -> str:
     candidate = os.path.join(ROOT, "models", relative)
     if os.path.exists(candidate):
         return candidate
-    return candidate  # 返回相对路径，由 rag_pipeline 的 _resolve_model_name 兜底
+    return f"BAAI/{relative}"  # 本地不存在时使用 Hugging Face 官方模型标识
 
 
 API: Dict[str, Any] = {
@@ -43,8 +43,8 @@ API: Dict[str, Any] = {
 PATHS: Dict[str, Any] = {
     "datas_dir": "datas",
     "docs_dir": "datas/docs",
-    "chroma_persist_dir": "datas/chroma_db",
-    "chroma_persist_dir_fallback": "datas/chroma_db_fallback_768",
+    "chroma_persist_dir": "datas/chroma_db_512",
+    "chroma_persist_dir_fallback": "datas/chroma_db_fallback_512",
     "agent_memory_dir": "agent_memory",
     "log_dir": "logs",
     "goods_json": "datas/货品基础数据.json",
@@ -56,8 +56,8 @@ PATHS: Dict[str, Any] = {
 }
 
 RAG: Dict[str, Any] = {
-    "embedding_model": _model_path("bge-base-zh-v1.5"),
-    "fallback_model": _model_path("bge-base-zh-v1.5"),
+    "embedding_model": _model_path("bge-small-zh-v1.5"),
+    "fallback_model": _model_path("bge-small-zh-v1.5"),
     "chunk_size": 384,
     "chunk_overlap": 64,
     "distance_threshold": 1.5,

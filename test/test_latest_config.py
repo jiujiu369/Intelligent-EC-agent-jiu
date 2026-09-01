@@ -31,7 +31,7 @@ def test_project_env_overrides_stale_parent_environment():
     expected = [
         "https://api.apikl.ai/v1",
         "gpt-5.5",
-        "./models/bge-base-zh-v1.5",
+        "BAAI/bge-small-zh-v1.5",
     ]
     if actual != expected:
         raise AssertionError(f"配置未以项目 .env 为准: {actual!r}")
