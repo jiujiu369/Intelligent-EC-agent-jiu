@@ -5,11 +5,11 @@ import sys, os
 # 自动把当前脚本所在目录的【上一级目录】加入模块检索路径
 ROOT_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if ROOT_PATH not in sys.path:
-    sys.path.append(ROOT_PATH)
+    sys.path.insert(0, ROOT_PATH)
 import importlib.util
 import os
+import shutil
 import sys
-import tempfile
 import types
 
 
@@ -158,8 +158,11 @@ def _restore_modules(old_modules):
 
 failures = 0
 
-with tempfile.TemporaryDirectory() as tmpdir:
-    rag, old = _load_module(tmpdir)
+WORKTREE_TEMP_DIR = os.path.join(ROOT_PATH, "datas", "rag_vector_maintenance_runtime")
+os.makedirs(WORKTREE_TEMP_DIR, exist_ok=True)
+
+try:
+    rag, old = _load_module(WORKTREE_TEMP_DIR)
     try:
         added, skipped = rag.build_vector_db_docs()
         failures += _assert(added > 0 and skipped == 0, "政策文档首次入库返回新增数")
@@ -189,6 +192,8 @@ with tempfile.TemporaryDirectory() as tmpdir:
         failures += _assert("external_keep" in rag.collection.items, "全量重建回滚保留非 RAG 向量")
     finally:
         _restore_modules(old)
+finally:
+    shutil.rmtree(WORKTREE_TEMP_DIR, ignore_errors=True)
 
 print("=" * 60)
 print(f"  通过: {11 - failures}  失败: {failures}  总计: 11")

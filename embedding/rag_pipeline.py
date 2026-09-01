@@ -25,11 +25,11 @@ logger = get_logger(__name__)
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 BASE_DIR = os.path.join(PROJECT_ROOT, config.get("PATHS", "datas_dir"))#RAG项目数据
 CHROMA_PERSIST_PATH = os.path.join(PROJECT_ROOT, config.get("PATHS", "chroma_persist_dir"))
-FALLBACK_CHROMA_PERSIST_PATH = os.path.join(PROJECT_ROOT, config.get("PATHS", "chroma_persist_dir_384"))
+FALLBACK_CHROMA_PERSIST_PATH = os.path.join(PROJECT_ROOT, config.get("PATHS", "chroma_persist_dir_fallback"))
 DOC_FOLDER_PATH = os.path.join(PROJECT_ROOT, config.get("PATHS", "docs_dir"))#项目数据地址
 GOODS_JSON_PATH = os.path.join(PROJECT_ROOT, config.get("PATHS", "goods_json")) # 新增商品json路径
 COLLECTION_NAME = "customer_service_docs"
-FALLBACK_COLLECTION_NAME = "customer_service_docs_384"
+FALLBACK_COLLECTION_NAME = "customer_service_docs_fallback_768"
 FALLBACK_MODEL_NAME = config.get("RAG", "fallback_model")
 
 #=================加载本地embedding模型=====================
@@ -91,12 +91,12 @@ embedding_fn, chroma_client, collection, chroma_connection_failed = _init_chroma
     COLLECTION_NAME,
     "primary-768",
 )
-#=========minilm副库，主库加载失败则运行副库，两个都失效则兜底jieba管家次检索===============
+#=========bge备用库，主库加载失败则运行副库，两个都失效则兜底jieba关键词检索===============
 fallback_embedding_fn, fallback_chroma_client, fallback_collection, fallback_chroma_connection_failed = _init_chroma_collection(
     FALLBACK_MODEL_NAME,
     FALLBACK_CHROMA_PERSIST_PATH,
     FALLBACK_COLLECTION_NAME,
-    "fallback-384",
+    "fallback-768",
 )
 
 # ===================== 文件读取函数 =====================
@@ -391,11 +391,11 @@ def build_vector_db_docs():
     return _build_vector_db_docs_for(collection, "primary-768")
 
 
-def build_vector_db_docs_384():
-    """执行 ``build_vector_db_docs_384`` 对应的项目处理逻辑。
+def build_vector_db_docs_fallback():
+    """将政策文档写入备用 768 维向量集合。
     :return: 返回完成读取、构建或转换后的结果。
     """
-    return _build_vector_db_docs_for(fallback_collection, "fallback-384")
+    return _build_vector_db_docs_for(fallback_collection, "fallback-768")
 
 # =====================【新增】商品信息入库 =====================
 def _build_vector_db_goods_for(target_collection, label: str):
@@ -443,11 +443,11 @@ def build_vector_db_goods():
     return _build_vector_db_goods_for(collection, "primary-768")
 
 
-def build_vector_db_goods_384():
-    """执行 ``build_vector_db_goods_384`` 对应的项目处理逻辑。
+def build_vector_db_goods_fallback():
+    """将商品信息写入备用 768 维向量集合。
     :return: 返回完成读取、构建或转换后的结果。
     """
-    return _build_vector_db_goods_for(fallback_collection, "fallback-384")
+    return _build_vector_db_goods_for(fallback_collection, "fallback-768")
 
 
 def _is_meaningless_rag_query(query: str) -> bool:
@@ -505,11 +505,11 @@ def fallback_vector_search(query: str, top_k: int = 5, doc_type: str = None) -> 
     if fallback_collection is None:
         return rag_fallback_result()
     try:
-        filtered = _search_collection(fallback_collection, query, top_k, doc_type, "fallback-384")
+        filtered = _search_collection(fallback_collection, query, top_k, doc_type, "fallback-768")
         if filtered:
             return filtered
     except Exception as e:
-        logger.error(f"384维备用RAG检索异常 query={query} top_k={top_k} error={e}")
+        logger.error(f"fallback-768 RAG检索异常 query={query} top_k={top_k} error={e}")
     return fallback_keyword_search(query, top_k)
 
 
@@ -753,10 +753,12 @@ def clear_all_goods_vector():
 
 # ===================== 本地调试 =====================
 if __name__ == "__main__":
-    # 1. 先导入政策文档
+    # 1. 导入主、备用政策文档
     build_vector_db_docs()
-    # 2. 导入商品信息
+    build_vector_db_docs_fallback()
+    # 2. 导入主、备用商品信息
     build_vector_db_goods()
+    build_vector_db_goods_fallback()
 
     # 测试1：只检索商品信息
     print("\n====【测试：商品检索】====")

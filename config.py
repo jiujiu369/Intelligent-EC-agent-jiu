@@ -44,7 +44,7 @@ PATHS: Dict[str, Any] = {
     "datas_dir": "datas",
     "docs_dir": "datas/docs",
     "chroma_persist_dir": "datas/chroma_db",
-    "chroma_persist_dir_384": "datas/chroma_db_384",
+    "chroma_persist_dir_fallback": "datas/chroma_db_fallback_768",
     "agent_memory_dir": "agent_memory",
     "log_dir": "logs",
     "goods_json": "datas/货品基础数据.json",
@@ -57,7 +57,7 @@ PATHS: Dict[str, Any] = {
 
 RAG: Dict[str, Any] = {
     "embedding_model": _model_path("bge-base-zh-v1.5"),
-    "fallback_model": _model_path("paraphrase-multilingual-MiniLM-L12-v2"),
+    "fallback_model": _model_path("bge-base-zh-v1.5"),
     "chunk_size": 384,
     "chunk_overlap": 64,
     "distance_threshold": 1.5,
