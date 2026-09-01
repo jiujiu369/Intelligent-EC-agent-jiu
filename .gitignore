@@ -2,6 +2,9 @@
 datas/chroma_db/
 datas/chroma_db_384/
 
+# Codex/Superpowers 隔离工作区
+.worktrees/
+
 # Python缓存文件
 __pycache__/
 *.pyc
