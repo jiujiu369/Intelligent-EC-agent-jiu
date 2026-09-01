@@ -2,10 +2,9 @@
 
 import json
 import os
-import shutil
 import sys
-import tempfile
 import unittest
+import uuid
 from pathlib import Path
 from unittest.mock import patch
 
@@ -15,6 +14,7 @@ if ROOT_PATH not in sys.path:
     sys.path.append(ROOT_PATH)
 
 import tools.auth_login as auth_login
+from tools.rbac import check_permission, get_allowed_tools, mask_goods_data
 
 
 class AuthSecurityFlowTests(unittest.TestCase):
@@ -24,19 +24,149 @@ class AuthSecurityFlowTests(unittest.TestCase):
         """将认证模块指向本测试独占的临时用户文件。"""
         self.original_consumer_file = auth_login.CONSUMER_FILE
         self.original_merchant_file = auth_login.MERCHANT_FILE
-        self.temp_dir = Path(
-            tempfile.mkdtemp(prefix=".project1_auth_", dir=os.path.dirname(__file__))
-        )
-        self.addCleanup(shutil.rmtree, self.temp_dir, ignore_errors=True)
+        token = uuid.uuid4().hex
+        data_dir = Path(ROOT_PATH) / "datas"
+        self.temp_files = [
+            data_dir / f"auth_test_{token}_consumer.json",
+            data_dir / f"auth_test_{token}_merchant.json",
+        ]
+        self.addCleanup(self._remove_test_files)
         self.addCleanup(self._restore_auth_paths)
-        auth_login.CONSUMER_FILE = self.temp_dir / "consumer_users.json"
-        auth_login.MERCHANT_FILE = self.temp_dir / "merchant_users.json"
+        auth_login.CONSUMER_FILE, auth_login.MERCHANT_FILE = self.temp_files
+        if hasattr(auth_login, "_reset_password_attempts"):
+            auth_login._reset_password_attempts.clear()
         auth_login.init_auth_files()
 
     def _restore_auth_paths(self):
         """恢复模块原始路径，避免后续测试访问临时文件。"""
         auth_login.CONSUMER_FILE = self.original_consumer_file
         auth_login.MERCHANT_FILE = self.original_merchant_file
+
+    def _remove_test_files(self):
+        """只删除本用例创建的两个用户文件。"""
+        for file_path in self.temp_files:
+            file_path.unlink(missing_ok=True)
+
+    def _register(self, role, username="alice", password="oldpass", answer="Taipei"):
+        """创建带安全问题的真实测试账号。"""
+        return auth_login.register_user(
+            role,
+            username,
+            password,
+            auth_login.SECURITY_QUESTIONS[0],
+            answer,
+        )
+
+    def test_auth_files_initialize_as_empty_json_without_touching_real_files(self):
+        """文件初始化被移除或写入预设账号时，本用例会失败。"""
+        self.assertEqual(json.loads(auth_login.CONSUMER_FILE.read_text(encoding="utf-8")), {})
+        self.assertEqual(json.loads(auth_login.MERCHANT_FILE.read_text(encoding="utf-8")), {})
+
+    def test_registration_validation_and_login_generic_failures_preserve_legacy_contract(self):
+        """注册校验或登录通用错误提示退化时，本用例会失败。"""
+        question = auth_login.SECURITY_QUESTIONS[0]
+        cases = [
+            ("bad-role", "valid_user", "oldpass", question, "answer"),
+            (auth_login.ROLE_CONSUMER, "ab", "oldpass", question, "answer"),
+            (auth_login.ROLE_CONSUMER, "valid_user", "123", question, "answer"),
+            (auth_login.ROLE_CONSUMER, "bad<user>", "oldpass", question, "answer"),
+            (auth_login.ROLE_CONSUMER, "valid_user", "oldpass", "自定义问题", "answer"),
+            (auth_login.ROLE_CONSUMER, "valid_user", "oldpass", question, ""),
+        ]
+        for args in cases:
+            with self.subTest(args=args):
+                self.assertFalse(auth_login.register_user(*args)[0])
+
+        self.assertTrue(self._register(auth_login.ROLE_CONSUMER)[0])
+        ok, _, role = auth_login.login_user(auth_login.ROLE_CONSUMER, "alice", "oldpass")
+        self.assertTrue(ok)
+        self.assertEqual(role, auth_login.ROLE_CONSUMER)
+
+        wrong = auth_login.login_user(auth_login.ROLE_CONSUMER, "alice", "wrong")
+        missing = auth_login.login_user(auth_login.ROLE_CONSUMER, "missing", "wrong")
+        self.assertFalse(wrong[0])
+        self.assertFalse(missing[0])
+        self.assertEqual(wrong[1], "用户名或密码错误")
+        self.assertEqual(missing[1], wrong[1])
+        self.assertIsNone(wrong[2])
+        self.assertIsNone(missing[2])
+
+    def test_password_hashes_use_independent_salts_and_verify(self):
+        """随机盐被复用或密码校验退化时，本用例会失败。"""
+        first_hash, first_salt = auth_login._hash_password("same-password")
+        second_hash, second_salt = auth_login._hash_password("same-password")
+
+        self.assertNotEqual(first_salt, second_salt)
+        self.assertNotEqual(first_hash, second_hash)
+        self.assertTrue(auth_login.verify_password(first_hash, first_salt, "same-password"))
+        self.assertTrue(auth_login.verify_password(second_hash, second_salt, "same-password"))
+
+    def test_auth_roles_still_match_rbac_and_masking_contract(self):
+        """账号角色与既有 RBAC 权限或脱敏规则脱节时，本用例会失败。"""
+        consumer_tools = get_allowed_tools(auth_login.ROLE_CONSUMER)
+        merchant_tools = get_allowed_tools(auth_login.ROLE_MERCHANT)
+        self.assertNotIn("update_goods", consumer_tools)
+        self.assertIn("update_goods", merchant_tools)
+        self.assertFalse(check_permission("update_goods", auth_login.ROLE_CONSUMER))
+        self.assertTrue(check_permission("update_goods", auth_login.ROLE_MERCHANT))
+
+        goods = [{"商品ID": "SP001", "售价": 99, "上架状态": "已上架"}]
+        self.assertNotIn("上架状态", mask_goods_data(goods, auth_login.ROLE_CONSUMER)[0])
+        self.assertIn("上架状态", mask_goods_data(goods, auth_login.ROLE_MERCHANT)[0])
+
+    def test_password_recovery_locks_after_three_failures_and_cooldown_is_deterministic(self):
+        """连续猜答案未触发锁定或锁定不按时钟解除时，本用例会失败。"""
+        self.assertTrue(self._register(auth_login.ROLE_CONSUMER)[0])
+
+        with patch("time.monotonic", return_value=100.0):
+            failures = [
+                auth_login.reset_password(
+                    auth_login.ROLE_CONSUMER, "alice", "wrong", "newpass", "newpass"
+                )
+                for _ in range(3)
+            ]
+            locked = auth_login.reset_password(
+                auth_login.ROLE_CONSUMER, "alice", "Taipei", "newpass", "newpass"
+            )
+
+        self.assertTrue(all(not ok for ok, _ in failures))
+        self.assertFalse(locked[0])
+        self.assertIn("稍后", locked[1])
+
+        with patch("time.monotonic", return_value=401.0):
+            recovered = auth_login.reset_password(
+                auth_login.ROLE_CONSUMER, "alice", "Taipei", "newpass", "newpass"
+            )
+        self.assertTrue(recovered[0], recovered[1])
+
+    def test_unknown_account_and_wrong_answer_share_message_and_success_clears_failures(self):
+        """账号枚举提示或成功后残留失败次数时，本用例会失败。"""
+        self.assertTrue(self._register(auth_login.ROLE_CONSUMER)[0])
+        with patch("time.monotonic", return_value=200.0):
+            missing = auth_login.reset_password(
+                auth_login.ROLE_CONSUMER, "missing", "wrong", "newpass", "newpass"
+            )
+            wrong = auth_login.reset_password(
+                auth_login.ROLE_CONSUMER, "alice", "wrong", "newpass", "newpass"
+            )
+            success = auth_login.reset_password(
+                auth_login.ROLE_CONSUMER, "alice", "Taipei", "newpass", "newpass"
+            )
+            first_after_success = auth_login.reset_password(
+                auth_login.ROLE_CONSUMER, "alice", "wrong", "finalpass", "finalpass"
+            )
+            second_after_success = auth_login.reset_password(
+                auth_login.ROLE_CONSUMER, "alice", "wrong", "finalpass", "finalpass"
+            )
+            final_success = auth_login.reset_password(
+                auth_login.ROLE_CONSUMER, "alice", "Taipei", "finalpass", "finalpass"
+            )
+
+        self.assertEqual(missing, wrong)
+        self.assertTrue(success[0], success[1])
+        self.assertFalse(first_after_success[0])
+        self.assertFalse(second_after_success[0])
+        self.assertTrue(final_success[0], final_success[1])
 
     def test_registration_recovery_and_password_change_store_no_plain_answer(self):
         """注册答案会哈希保存，且可用于找回和后续改密。"""

@@ -21,6 +21,10 @@ class FakeCollection:
         self.items = {}
         self.fail_add = False
 
+    def __bool__(self):
+        """模拟 Chroma 集合不保证真值语义的边界。"""
+        return False
+
     def get(self, ids=None, where=None, include=None):
         """根据键读取配置项、缓存项或集合数据。
         :param ids: 传入 ``ids`` 的业务数据。
@@ -208,6 +212,16 @@ try:
 
         update_result = rag.update_single_goods_vector("SP001")
         failures += _assert(update_result["status"] == "success" and update_result["added"] == 1, "单商品向量更新成功")
+        failures += _assert(
+            "goods_SP001_0" in rag.collection.items
+            and "goods_SP001_0" in rag.fallback_collection.items,
+            "单商品更新真实同步主、备用集合状态",
+        )
+        failures += _assert(
+            update_result.get("primary", {}).get("added") == 1
+            and update_result.get("fallback", {}).get("added") == 1,
+            "单商品更新分别报告主、备用结果",
+        )
         failures += _assert(rag.update_single_goods_vector("NOPE")["status"] == "fail", "单商品不存在返回失败")
 
         keyword_result = rag.fallback_keyword_search("退货 政策", top_k=1)
@@ -217,16 +231,47 @@ try:
 
         rag.collection.items["old_policy"] = {"document": "old", "metadata": {"doc_type": "service_rule"}}
         rag.collection.items["external_keep"] = {"document": "external", "metadata": {"doc_type": "external"}}
+        rag.fallback_collection.items["old_policy"] = {"document": "old", "metadata": {"doc_type": "service_rule"}}
+        rag.fallback_collection.items["external_keep"] = {"document": "external", "metadata": {"doc_type": "external"}}
         rag.collection.fail_add = True
         rebuild_result = rag.rebuild_all_vectors()
-        failures += _assert(rebuild_result["status"] == "fail", "全量重建异常时返回失败")
+        failures += _assert(rebuild_result["status"] == "partial", "单库重建异常时返回部分失败")
+        failures += _assert(
+            rebuild_result.get("primary", {}).get("status") == "fail"
+            and rebuild_result.get("fallback", {}).get("status") == "success",
+            "全量重建分别报告主、备用结果",
+        )
         failures += _assert("old_policy" in rag.collection.items, "全量重建异常时回滚旧向量")
         failures += _assert("external_keep" in rag.collection.items, "全量重建回滚保留非 RAG 向量")
+        failures += _assert(
+            "old_policy" not in rag.fallback_collection.items
+            and "goods_SP001_0" in rag.fallback_collection.items
+            and "goods_SP002_0" in rag.fallback_collection.items,
+            "主库失败时备用库仍独立完成重建",
+        )
+        failures += _assert(
+            "external_keep" in rag.fallback_collection.items,
+            "备用库重建保留非 RAG 向量",
+        )
+
+        clear_result = rag.clear_all_goods_vector()
+        failures += _assert(
+            isinstance(clear_result, dict)
+            and clear_result.get("status") == "success"
+            and clear_result.get("primary", {}).get("deleted") == 2
+            and clear_result.get("fallback", {}).get("deleted") == 2,
+            "清空商品向量分别报告主、备用删除数",
+        )
+        failures += _assert(
+            all(item["metadata"].get("doc_type") != "goods_info" for item in rag.collection.items.values())
+            and all(item["metadata"].get("doc_type") != "goods_info" for item in rag.fallback_collection.items.values()),
+            "清空商品向量真实删除两个集合的数据",
+        )
     finally:
         _restore_modules(old)
 finally:
     _cleanup_test_runtime_dir(WORKTREE_TEMP_DIR)
 
 print("=" * 60)
-print(f"  通过: {13 - failures}  失败: {failures}  总计: 13")
+print(f"  通过: {20 - failures}  失败: {failures}  总计: 20")
 raise SystemExit(1 if failures else 0)

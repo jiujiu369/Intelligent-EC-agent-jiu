@@ -256,7 +256,8 @@ def _collection_id_exists(chunk_id: str, target_collection=None) -> bool:
     :param target_collection: 传入 ``target_collection`` 的业务数据。
     :return: 返回函数处理得到的结果。
     """
-    target_collection = target_collection or collection
+    if target_collection is None:
+        target_collection = collection
     if target_collection is None:
         return False
     data = target_collection.get(ids=[chunk_id])
@@ -271,7 +272,8 @@ def _add_chunks_if_missing(documents: List[str], metadatas: List[Dict], ids: Lis
     :param target_collection: 传入 ``target_collection`` 的业务数据。
     :return: 返回函数处理得到的结果。
     """
-    target_collection = target_collection or collection
+    if target_collection is None:
+        target_collection = collection
     added_docs = []
     added_metas = []
     added_ids = []
@@ -307,47 +309,56 @@ def _goods_to_text(goods: Dict) -> str:
     )
 
 #根据筛选条件（where）批量删除向量数据，返回删除条数
-def _delete_by_where(where: Dict) -> int:
+def _delete_by_where(where: Dict, target_collection=None) -> int:
     """按照元数据条件删除向量集合中的记录。
     :param where: 传入 ``where`` 的业务数据。
-    :return: 返回函数处理得到的结果。
+    :param target_collection: 需要删除记录的目标集合，省略时使用主集合。
+    :return: 返回删除的记录数量。
     """
-    if collection is None:
+    if target_collection is None:
+        target_collection = collection
+    if target_collection is None:
         return 0
-    data = collection.get(where=where)
+    data = target_collection.get(where=where)
     ids = data.get("ids", [])
     if ids:
-        collection.delete(ids=ids)
+        target_collection.delete(ids=ids)
     return len(ids)
 
 #修改向量库前先备份，出错可以恢复。
 # 通过将要修改的向量文本暂时存储在内存中，如果需要回退则重新向量化
-def _snapshot_collection() -> Dict:
+def _snapshot_collection(target_collection=None) -> Dict:
     """导出向量集合当前记录，供失败时恢复。
-    :return: 返回函数处理得到的结果。
+    :param target_collection: 需要快照的目标集合，省略时使用主集合。
+    :return: 返回集合快照。
     """
-    if collection is None:
+    if target_collection is None:
+        target_collection = collection
+    if target_collection is None:
         return {"ids": [], "documents": [], "metadatas": []}
     try:
-        return collection.get(include=["documents", "metadatas"])
+        return target_collection.get(include=["documents", "metadatas"])
     except TypeError:
-        return collection.get()
+        return target_collection.get()
 
 #将暂存的数据重新向量化
-def _restore_collection_snapshot(snapshot: Dict) -> None:
+def _restore_collection_snapshot(snapshot: Dict, target_collection=None) -> None:
     """执行 ``_restore_collection_snapshot`` 对应的项目处理逻辑。
     :param snapshot: 传入 ``snapshot`` 的业务数据。
+    :param target_collection: 需要恢复的目标集合，省略时使用主集合。
     """
-    if collection is None:
+    if target_collection is None:
+        target_collection = collection
+    if target_collection is None:
         return
-    _delete_by_where({"doc_type": "service_rule"})
-    _delete_by_where({"doc_type": "goods_info"})
+    _delete_by_where({"doc_type": "service_rule"}, target_collection)
+    _delete_by_where({"doc_type": "goods_info"}, target_collection)
     ids = snapshot.get("ids", [])
     documents = snapshot.get("documents", [])
     metadatas = snapshot.get("metadatas", [])
     if ids:
-        collection.delete(ids=ids)
-        collection.add(documents=documents, metadatas=metadatas, ids=ids)
+        target_collection.delete(ids=ids)
+        target_collection.add(documents=documents, metadatas=metadatas, ids=ids)
 
 # =====================【原有】政策文档入库 =====================
 def _build_vector_db_docs_for(target_collection, label: str):
@@ -559,14 +570,48 @@ def _search_collection(target_collection, query: str, top_k: int, doc_type: str,
     return filtered
 
 
+def _update_goods_in_collection(target_collection, label: str, target_goods: Dict) -> Dict:
+    """在一个明确的向量集合中更新指定商品。"""
+    if target_collection is None:
+        return {"status": "fail", "msg": f"{label} ChromaDB不可用"}
+    try:
+        deleted = _delete_by_where(
+            {"goods_id": target_goods["商品ID"]}, target_collection
+        )
+        chunks = split_text(_goods_to_text(target_goods))
+        all_ids = []
+        all_metadatas = []
+        for bidx, _chunk in enumerate(chunks):
+            all_ids.append(f"goods_{target_goods['商品ID']}_{bidx}")
+            all_metadatas.append({
+                "goods_id": target_goods["商品ID"],
+                "doc_type": "goods_info",
+            })
+        added, skipped = _add_chunks_if_missing(
+            chunks, all_metadatas, all_ids, target_collection
+        )
+        logger.info(
+            f"{label} 单商品向量更新完成 goods_id={target_goods['商品ID']} "
+            f"deleted={deleted} added={added} skipped={skipped}"
+        )
+        return {
+            "status": "success",
+            "deleted": deleted,
+            "added": added,
+            "skipped": skipped,
+        }
+    except Exception as e:
+        logger.error(
+            f"{label} 单商品向量更新失败 goods_id={target_goods['商品ID']} error={e}"
+        )
+        return {"status": "fail", "msg": str(e)}
+
+
 def update_single_goods_vector(goods_id: str) -> Dict:
     """同步更新指定商品在主库和备用库中的向量记录。
     :param goods_id: 商品的唯一编号。
     :return: 返回函数处理得到的结果。
     """
-    if collection is None:
-        logger.error(f"ChromaDB不可用，单商品向量更新失败 goods_id={goods_id}")
-        return {"status": "fail", "msg": "ChromaDB不可用"}
     goods_list = [normalize_goods_key(item) for item in load_goods_json()]
     target_goods = None
     for goods in goods_list:
@@ -577,61 +622,87 @@ def update_single_goods_vector(goods_id: str) -> Dict:
         logger.warning(f"单商品向量更新失败，商品不存在 goods_id={goods_id}")
         return {"status": "fail", "msg": "商品不存在", "goods_id": goods_id}
 
-    deleted = _delete_by_where({"goods_id": target_goods["商品ID"]})
-    chunks = split_text(_goods_to_text(target_goods))
-    all_ids = []
-    all_metadatas = []
-    for bidx, _chunk in enumerate(chunks):
-        all_ids.append(f"goods_{target_goods['商品ID']}_{bidx}")
-        all_metadatas.append({
-            "goods_id": target_goods["商品ID"],
-            "doc_type": "goods_info"
-        })
-    added, skipped = _add_chunks_if_missing(chunks, all_metadatas, all_ids)
-    logger.info(
-        f"单商品向量更新完成 goods_id={target_goods['商品ID']} deleted={deleted} added={added} skipped={skipped}"
+    primary_result = _update_goods_in_collection(
+        collection, "primary-768", target_goods
     )
+    fallback_result = _update_goods_in_collection(
+        fallback_collection, "fallback-768", target_goods
+    )
+    successes = sum(
+        result["status"] == "success"
+        for result in (primary_result, fallback_result)
+    )
+    status = "success" if successes == 2 else "partial" if successes else "fail"
     return {
-        "status": "success",
+        "status": status,
         "goods_id": target_goods["商品ID"],
-        "deleted": deleted,
-        "added": added,
-        "skipped": skipped,
+        "deleted": primary_result.get("deleted", 0),
+        "added": primary_result.get("added", 0),
+        "skipped": primary_result.get("skipped", 0),
+        "primary": primary_result,
+        "fallback": fallback_result,
     }
 
 
-def rebuild_all_vectors() -> Dict:
-    """重新构建主库和备用库的全部文档及商品向量。
-    :return: 返回函数处理得到的结果。
-    """
-    if collection is None:
-        logger.error("ChromaDB不可用，全量重建失败")
-        return {"status": "fail", "msg": "ChromaDB不可用"}
-    snapshot = _snapshot_collection()
-    docs_count = len(load_all_docs(DOC_FOLDER_PATH))
-    goods_count = len(load_goods_json())
-    logger.info(f"开始全量重建向量 progress=0/3 docs={docs_count} goods={goods_count}")
+def _rebuild_collection(target_collection, label: str) -> Dict:
+    """独立重建一个目标集合，并在该集合失败时回滚。"""
+    if target_collection is None:
+        return {"status": "fail", "msg": f"{label} ChromaDB不可用"}
+    snapshot = _snapshot_collection(target_collection)
     try:
-        _delete_by_where({"doc_type": "service_rule"})
-        _delete_by_where({"doc_type": "goods_info"})
-        logger.info(f"全量重建进度 progress=1/3 deleted_old_vectors docs={docs_count} goods={goods_count}")
-        docs_added, docs_skipped = build_vector_db_docs()
-        logger.info(f"全量重建进度 progress=2/3 docs_added={docs_added} docs_skipped={docs_skipped}")
-        goods_added, goods_skipped = build_vector_db_goods()
-        logger.info(f"全量重建完成 progress=3/3 goods_added={goods_added} goods_skipped={goods_skipped}")
+        _delete_by_where({"doc_type": "service_rule"}, target_collection)
+        _delete_by_where({"doc_type": "goods_info"}, target_collection)
+        docs_added, docs_skipped = _build_vector_db_docs_for(
+            target_collection, label
+        )
+        goods_added, goods_skipped = _build_vector_db_goods_for(
+            target_collection, label
+        )
         return {
             "status": "success",
-            "docs_count": docs_count,
-            "goods_count": goods_count,
             "docs_added": docs_added,
             "docs_skipped": docs_skipped,
             "goods_added": goods_added,
             "goods_skipped": goods_skipped,
         }
     except Exception as e:
-        logger.error(f"全量重建异常，开始回滚 error={e}")
-        _restore_collection_snapshot(snapshot)
-        return {"status": "fail", "msg": f"重建失败，已回滚：{e}"}
+        logger.error(f"{label} 全量重建异常，开始回滚 error={e}")
+        try:
+            _restore_collection_snapshot(snapshot, target_collection)
+            return {"status": "fail", "msg": f"重建失败，已回滚：{e}"}
+        except Exception as rollback_error:
+            logger.error(f"{label} 全量重建回滚失败 error={rollback_error}")
+            return {
+                "status": "fail",
+                "msg": f"重建失败：{e}；回滚失败：{rollback_error}",
+            }
+
+
+def rebuild_all_vectors() -> Dict:
+    """重新构建主库和备用库的全部文档及商品向量。
+    :return: 返回函数处理得到的结果。
+    """
+    docs_count = len(load_all_docs(DOC_FOLDER_PATH))
+    goods_count = len(load_goods_json())
+    logger.info(f"开始全量重建向量 docs={docs_count} goods={goods_count}")
+    primary_result = _rebuild_collection(collection, "primary-768")
+    fallback_result = _rebuild_collection(fallback_collection, "fallback-768")
+    successes = sum(
+        result["status"] == "success"
+        for result in (primary_result, fallback_result)
+    )
+    status = "success" if successes == 2 else "partial" if successes else "fail"
+    return {
+        "status": status,
+        "docs_count": docs_count,
+        "goods_count": goods_count,
+        "docs_added": primary_result.get("docs_added", 0),
+        "docs_skipped": primary_result.get("docs_skipped", 0),
+        "goods_added": primary_result.get("goods_added", 0),
+        "goods_skipped": primary_result.get("goods_skipped", 0),
+        "primary": primary_result,
+        "fallback": fallback_result,
+    }
 
 
 def fallback_keyword_search(query: str, top_k: int = 5) -> List[Dict]:
@@ -741,15 +812,33 @@ def _tokenize(text: str) -> List[str]:
     return normalized_tokens
 
 # =====================【新增工具】清空商品向量（商品大量更新时使用） =====================
+def _clear_goods_in_collection(target_collection, label: str) -> Dict:
+    """清空一个明确目标集合中的商品向量。"""
+    if target_collection is None:
+        return {"status": "fail", "msg": f"{label} ChromaDB不可用", "deleted": 0}
+    try:
+        deleted = _delete_by_where({"doc_type": "goods_info"}, target_collection)
+        logger.info(f"{label} 已清空全部商品向量数据 count={deleted}")
+        return {"status": "success", "deleted": deleted}
+    except Exception as e:
+        logger.error(f"{label} 清空商品向量失败 error={e}")
+        return {"status": "fail", "msg": str(e), "deleted": 0}
+
+
 def clear_all_goods_vector():
-    """删除所有doc_type=goods_info的数据，用于商品更新重建。"""
-    if collection is None:
-        logger.error("ChromaDB不可用，跳过清空商品向量")
-        return
-    all_data = collection.get(where={"doc_type": "goods_info"})
-    if all_data["ids"]:
-        collection.delete(ids=all_data["ids"])
-        logger.info(f"已清空全部商品向量数据 count={len(all_data['ids'])}")
+    """删除主、备用集合中所有 ``doc_type=goods_info`` 的数据。"""
+    primary_result = _clear_goods_in_collection(collection, "primary-768")
+    fallback_result = _clear_goods_in_collection(fallback_collection, "fallback-768")
+    successes = sum(
+        result["status"] == "success"
+        for result in (primary_result, fallback_result)
+    )
+    status = "success" if successes == 2 else "partial" if successes else "fail"
+    return {
+        "status": status,
+        "primary": primary_result,
+        "fallback": fallback_result,
+    }
 
 # ===================== 本地调试 =====================
 if __name__ == "__main__":

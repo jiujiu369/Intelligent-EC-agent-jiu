@@ -14,6 +14,7 @@ import hashlib
 import os
 import sys
 import tempfile
+import time
 
 from typing import Tuple, Optional
 
@@ -52,6 +53,12 @@ SECURITY_QUESTIONS = (
     "你的童年昵称是？",
     "你最喜欢的城市是？",
 )
+
+RESET_PASSWORD_FAILURE_LIMIT = 3
+RESET_PASSWORD_COOLDOWN_SECONDS = 300
+_RESET_PASSWORD_FAILURE_MESSAGE = "用户名或安全问题答案错误"
+_RESET_PASSWORD_LOCK_MESSAGE = "找回请求暂时受限，请稍后重试"
+_reset_password_attempts = {}
 
 # 密码哈希参数
 HASH_ALGORITHM = "sha256"
@@ -143,6 +150,34 @@ def _has_security_question(user_data: dict) -> bool:
         and bool(user_data.get("security_answer_hash"))
         and bool(user_data.get("security_answer_salt"))
     )
+
+
+def _reset_attempt_key(role: str, username: str) -> tuple:
+    """构建找回密码失败计数的角色隔离键。"""
+    return role, (username or "").strip()
+
+
+def _is_reset_attempt_locked(key: tuple, now: float) -> bool:
+    """判断找回密码尝试是否仍处于冷却期。"""
+    state = _reset_password_attempts.get(key)
+    if not state:
+        return False
+    locked_until = state.get("locked_until", 0.0)
+    if locked_until > now:
+        return True
+    if locked_until:
+        _reset_password_attempts.pop(key, None)
+    return False
+
+
+def _record_reset_failure(key: tuple, now: float) -> None:
+    """记录一次失败，并在达到上限时启动冷却。"""
+    state = _reset_password_attempts.setdefault(
+        key, {"failures": 0, "locked_until": 0.0}
+    )
+    state["failures"] += 1
+    if state["failures"] >= RESET_PASSWORD_FAILURE_LIMIT:
+        state["locked_until"] = now + RESET_PASSWORD_COOLDOWN_SECONDS
 
 
 # ====================== 文件初始化 ======================
@@ -356,11 +391,17 @@ def reset_password(
     if not valid_password:
         return False, message
 
-    users = _load_users(role)
     username = (username or "").strip()
+    attempt_key = _reset_attempt_key(role, username)
+    now = time.monotonic()
+    if _is_reset_attempt_locked(attempt_key, now):
+        return False, _RESET_PASSWORD_LOCK_MESSAGE
+
+    users = _load_users(role)
     user_data = users.get(username)
     if user_data is None:
-        return False, "用户名或安全问题答案错误"
+        _record_reset_failure(attempt_key, now)
+        return False, _RESET_PASSWORD_FAILURE_MESSAGE
     if not _has_security_question(user_data):
         return False, "该账号尚未设置安全问题，无法找回密码"
 
@@ -370,13 +411,15 @@ def reset_password(
         user_data["security_answer_salt"],
         normalized_answer,
     ):
-        return False, "用户名或安全问题答案错误"
+        _record_reset_failure(attempt_key, now)
+        return False, _RESET_PASSWORD_FAILURE_MESSAGE
 
     password_hash, salt = _hash_password(new_password)
     user_data["password_hash"] = password_hash
     user_data["salt"] = salt
     if not _save_users(role, users):
         return False, "密码重设失败：无法写入用户文件"
+    _reset_password_attempts.pop(attempt_key, None)
     return True, "密码重设成功"
 
 
