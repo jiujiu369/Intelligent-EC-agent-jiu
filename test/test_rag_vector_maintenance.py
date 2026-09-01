@@ -10,7 +10,9 @@ import importlib.util
 import os
 import shutil
 import sys
+import tempfile
 import types
+import uuid
 
 
 class FakeCollection:
@@ -156,10 +158,40 @@ def _restore_modules(old_modules):
             sys.modules[name] = module
 
 
+def _create_test_runtime_dir(parent_dir):
+    """创建本次测试独占的工作目录。"""
+    runtime_dir = os.path.join(parent_dir, f"rag_vector_maintenance_{uuid.uuid4().hex}")
+    os.mkdir(runtime_dir)
+    return runtime_dir
+
+
+def _cleanup_test_runtime_dir(runtime_dir):
+    """仅删除本次测试创建的工作目录。"""
+    shutil.rmtree(runtime_dir, ignore_errors=True)
+
+
 failures = 0
 
-WORKTREE_TEMP_DIR = os.path.join(ROOT_PATH, "datas", "rag_vector_maintenance_runtime")
-os.makedirs(WORKTREE_TEMP_DIR, exist_ok=True)
+TEMP_PARENT_DIR = os.path.join(ROOT_PATH, "datas")
+sentinel_fd, sentinel_path = tempfile.mkstemp(
+    prefix="rag_vector_maintenance_preserve_",
+    dir=TEMP_PARENT_DIR,
+)
+os.close(sentinel_fd)
+safe_temp_helpers_exist = all(name in globals() for name in [
+    "_create_test_runtime_dir", "_cleanup_test_runtime_dir",
+])
+failures += _assert(safe_temp_helpers_exist, "维护测试提供唯一临时目录清理入口")
+if safe_temp_helpers_exist:
+    cleanup_probe_dir = _create_test_runtime_dir(TEMP_PARENT_DIR)
+    _cleanup_test_runtime_dir(cleanup_probe_dir)
+    failures += _assert(
+        not os.path.exists(cleanup_probe_dir) and os.path.exists(sentinel_path),
+        "清理唯一临时目录时保留同级预存资料",
+    )
+os.unlink(sentinel_path)
+
+WORKTREE_TEMP_DIR = _create_test_runtime_dir(TEMP_PARENT_DIR)
 
 try:
     rag, old = _load_module(WORKTREE_TEMP_DIR)
@@ -193,8 +225,8 @@ try:
     finally:
         _restore_modules(old)
 finally:
-    shutil.rmtree(WORKTREE_TEMP_DIR, ignore_errors=True)
+    _cleanup_test_runtime_dir(WORKTREE_TEMP_DIR)
 
 print("=" * 60)
-print(f"  通过: {11 - failures}  失败: {failures}  总计: 11")
+print(f"  通过: {13 - failures}  失败: {failures}  总计: 13")
 raise SystemExit(1 if failures else 0)
