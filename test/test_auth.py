@@ -7,6 +7,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 
 ROOT_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
@@ -161,6 +162,87 @@ class AuthSecurityFlowTests(unittest.TestCase):
             )[0]
         )
         self.assertTrue(auth_login.login_user(auth_login.ROLE_MERCHANT, "seller", "oldpass")[0])
+
+    def test_invalid_role_cannot_read_or_overwrite_merchant_users(self):
+        """直接调用文件助手时，非法角色也不能触碰商家用户文件。"""
+        merchant_content = '{"merchant_only": {"sentinel": "keep"}}'
+        auth_login.MERCHANT_FILE.write_text(merchant_content, encoding="utf-8")
+
+        loaded = auth_login._load_users("attacker")
+        saved = auth_login._save_users("attacker", {"attacker": {}})
+
+        self.assertEqual(loaded, {})
+        self.assertFalse(saved)
+        self.assertEqual(
+            auth_login.MERCHANT_FILE.read_text(encoding="utf-8"), merchant_content
+        )
+
+    def test_all_updates_preserve_original_file_when_atomic_replace_fails(self):
+        """原子替换失败时，所有更新接口均失败且不会截断原用户文件。"""
+        ok, _ = auth_login.register_user(
+            auth_login.ROLE_CONSUMER,
+            "alice",
+            "oldpass",
+            auth_login.SECURITY_QUESTIONS[0],
+            "Taipei",
+        )
+        self.assertTrue(ok)
+        actions = [
+            (
+                "register_user",
+                lambda: auth_login.register_user(
+                    auth_login.ROLE_CONSUMER,
+                    "newuser",
+                    "newpass",
+                    auth_login.SECURITY_QUESTIONS[1],
+                    "Buddy",
+                ),
+            ),
+            (
+                "reset_password",
+                lambda: auth_login.reset_password(
+                    auth_login.ROLE_CONSUMER,
+                    "alice",
+                    "taipei",
+                    "resetpass",
+                    "resetpass",
+                ),
+            ),
+            (
+                "change_password",
+                lambda: auth_login.change_password(
+                    auth_login.ROLE_CONSUMER,
+                    "alice",
+                    "oldpass",
+                    "changedpass",
+                    "changedpass",
+                ),
+            ),
+            (
+                "set_security_question",
+                lambda: auth_login.set_security_question(
+                    auth_login.ROLE_CONSUMER,
+                    "alice",
+                    "oldpass",
+                    auth_login.SECURITY_QUESTIONS[1],
+                    "Buddy",
+                ),
+            ),
+        ]
+        results = []
+        for name, action in actions:
+            original_content = auth_login.CONSUMER_FILE.read_text(encoding="utf-8")
+            with patch.object(auth_login.os, "replace", side_effect=OSError("replace failed")):
+                update_ok, _ = action()
+            results.append(
+                (name, update_ok, original_content, auth_login.CONSUMER_FILE.read_text(encoding="utf-8"))
+            )
+            auth_login.CONSUMER_FILE.write_text(original_content, encoding="utf-8")
+
+        for name, update_ok, original_content, current_content in results:
+            with self.subTest(update=name):
+                self.assertFalse(update_ok)
+                self.assertEqual(current_content, original_content)
 
 
 if __name__ == "__main__":

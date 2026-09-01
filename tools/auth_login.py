@@ -13,6 +13,7 @@ import json
 import hashlib
 import os
 import sys
+import tempfile
 
 from typing import Tuple, Optional
 
@@ -191,6 +192,9 @@ def _load_users(role: str) -> dict:
     :return: 返回完成读取、构建或转换后的结果。
     """
     file_path = _get_user_file(role)
+    if file_path is None:
+        print(f"[ERROR] 无效角色，拒绝读取用户文件: {role}")
+        return {}
     try:
         with open(file_path, "r", encoding="utf-8") as f:
             return json.load(f)
@@ -209,21 +213,44 @@ def _save_users(role: str, users: dict) -> bool:
     :return: 返回函数处理得到的结果。
     """
     file_path = _get_user_file(role)
+    if file_path is None:
+        print(f"[ERROR] 无效角色，拒绝写入用户文件: {role}")
+        return False
+
+    temp_path = None
     try:
-        with open(file_path, "w", encoding="utf-8") as f:
+        directory = os.path.dirname(os.path.abspath(file_path))
+        fd, temp_path = tempfile.mkstemp(
+            prefix=".users_", suffix=".tmp", dir=directory
+        )
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
             json.dump(users, f, ensure_ascii=False, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(temp_path, file_path)
+        temp_path = None
         return True
     except Exception as e:
         print(f"[ERROR] 无法写入用户文件 {file_path}: {e}")
         return False
+    finally:
+        if temp_path and os.path.exists(temp_path):
+            try:
+                os.remove(temp_path)
+            except OSError:
+                pass
 
 
-def _get_user_file(role: str) -> str:
+def _get_user_file(role: str) -> Optional[str]:
     """获取角色对应的用户文件路径。
     :param role: 当前用户角色。
     :return: 返回完成读取、构建或转换后的结果。
     """
-    return CONSUMER_FILE if role == ROLE_CONSUMER else MERCHANT_FILE
+    if role == ROLE_CONSUMER:
+        return CONSUMER_FILE
+    if role == ROLE_MERCHANT:
+        return MERCHANT_FILE
+    return None
 
 
 # ====================== 账号注册 ======================
