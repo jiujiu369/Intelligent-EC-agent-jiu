@@ -1,6 +1,7 @@
 # Chroma向量数据库（运行自动生成，禁止提交）
 datas/chroma_db/
 datas/chroma_db_384/
+datas/chroma_db_fallback_768/
 
 # Codex/Superpowers 隔离工作区
 .worktrees/
