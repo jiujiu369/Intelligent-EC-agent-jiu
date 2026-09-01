@@ -648,7 +648,11 @@ def _rebuild_collection(target_collection, label: str) -> Dict:
     """独立重建一个目标集合，并在该集合失败时回滚。"""
     if target_collection is None:
         return {"status": "fail", "msg": f"{label} ChromaDB不可用"}
-    snapshot = _snapshot_collection(target_collection)
+    try:
+        snapshot = _snapshot_collection(target_collection)
+    except Exception as e:
+        logger.error(f"{label} 全量重建快照失败 error={e}")
+        return {"status": "fail", "msg": f"快照失败：{e}"}
     try:
         _delete_by_where({"doc_type": "service_rule"}, target_collection)
         _delete_by_where({"doc_type": "goods_info"}, target_collection)

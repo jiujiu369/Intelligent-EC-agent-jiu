@@ -20,6 +20,7 @@ class FakeCollection:
         """初始化对象所需的状态和依赖。"""
         self.items = {}
         self.fail_add = False
+        self.fail_snapshot = False
 
     def __bool__(self):
         """模拟 Chroma 集合不保证真值语义的边界。"""
@@ -32,6 +33,8 @@ class FakeCollection:
         :param include: 传入 ``include`` 的业务数据。
         :return: 返回函数处理得到的结果。
         """
+        if self.fail_snapshot and include is not None:
+            raise RuntimeError("snapshot failed")
         matched = []
         if ids is not None:
             matched = [item_id for item_id in ids if item_id in self.items]
@@ -267,11 +270,50 @@ try:
             and all(item["metadata"].get("doc_type") != "goods_info" for item in rag.fallback_collection.items.values()),
             "清空商品向量真实删除两个集合的数据",
         )
+
+        rag.collection.items = {
+            "primary_snapshot_keep": {
+                "document": "primary old",
+                "metadata": {"doc_type": "service_rule"},
+            }
+        }
+        primary_before_snapshot_failure = dict(rag.collection.items)
+        rag.fallback_collection.items = {
+            "fallback_old": {
+                "document": "fallback old",
+                "metadata": {"doc_type": "service_rule"},
+            }
+        }
+        rag.collection.fail_snapshot = True
+        try:
+            snapshot_failure_result = rag.rebuild_all_vectors()
+        except Exception as exc:
+            snapshot_failure_result = {"raised": str(exc)}
+        failures += _assert(
+            snapshot_failure_result.get("status") == "partial",
+            "主库快照失败时整体返回部分失败而非抛异常",
+        )
+        failures += _assert(
+            snapshot_failure_result.get("primary", {}).get("status") == "fail"
+            and "snapshot failed" in snapshot_failure_result.get("primary", {}).get("msg", "")
+            and snapshot_failure_result.get("fallback", {}).get("status") == "success",
+            "快照失败结果可诊断且备用库仍成功",
+        )
+        failures += _assert(
+            rag.collection.items == primary_before_snapshot_failure,
+            "快照失败的主库不删除数据也不执行无快照回滚",
+        )
+        failures += _assert(
+            "fallback_old" not in rag.fallback_collection.items
+            and "goods_SP001_0" in rag.fallback_collection.items
+            and "goods_SP002_0" in rag.fallback_collection.items,
+            "主库快照失败时备用库仍独立完成重建",
+        )
     finally:
         _restore_modules(old)
 finally:
     _cleanup_test_runtime_dir(WORKTREE_TEMP_DIR)
 
 print("=" * 60)
-print(f"  通过: {20 - failures}  失败: {failures}  总计: 20")
+print(f"  通过: {24 - failures}  失败: {failures}  总计: 24")
 raise SystemExit(1 if failures else 0)
