@@ -38,8 +38,13 @@ from tools.auth_login import (
     init_auth_files,
     login_user,
     register_user,
+    get_security_question,
+    reset_password,
+    change_password,
+    set_security_question,
     ROLE_CONSUMER,
     ROLE_MERCHANT,
+    SECURITY_QUESTIONS,
 )
 from utils.logger import get_logger, set_console_logging_enabled
 from embedding import rag_pipeline
@@ -62,6 +67,20 @@ AGENT_API_KEY=sk-...
 $env:AGENT_API_KEY="sk-..."
 
 当前 Agent 只能返回��底回复，无法调用大模型。"""
+
+CONSUMER_GUIDE = """### 👤 消费者使用说明
+
+- 查询订单、商品和物流信息
+- 创建和查询售后申请
+- 输入「帮助」查看会话管理命令
+"""
+
+MERCHANT_GUIDE = """### 🏪 商家使用说明
+
+- 查询和维护商品库存
+- 查询订单、售后和销售报表
+- 输入「帮助」查看会话管理命令
+"""
 
 
 
@@ -136,6 +155,31 @@ def _role_label(role: str) -> str:
     return "消费者" if role == ROLE_CONSUMER else "商家"
 
 
+def _role_from_radio(role_radio: str) -> str:
+    """将界面角色选项映射为认证模块角色编码。
+    :param role_radio: 界面角色选择控件提交的值。
+    :return: 返回认证模块使用的角色编码。
+    """
+    return ROLE_CONSUMER if "消费者" in str(role_radio) else ROLE_MERCHANT
+
+
+def _account_result(ok: bool, message: str) -> str:
+    """为账号安全操作统一补充成功或失败图标。
+    :param ok: 认证操作是否成功。
+    :param message: 认证模块返回的说明文本。
+    :return: 返回可直接展示的界面提示。
+    """
+    return f"{'✅' if ok else '❌'} {message}"
+
+
+def _usage_guide(role: str) -> str:
+    """返回当前角色可执行操作的简要说明。
+    :param role: 当前用户角色。
+    :return: 返回对应角色的 Markdown 使用说明。
+    """
+    return CONSUMER_GUIDE if role == ROLE_CONSUMER else MERCHANT_GUIDE
+
+
 def _load_history(session, username, role, limit=30):
     """加载会话历史，转为 Gradio messages 格式 [{"role":..,"content":..}, ...]。
     :param session: 当前会话名称或会话数据。
@@ -169,13 +213,13 @@ def do_login(role_radio, username, password):
     :return: 返回函数处理得到的结果。
     """
     import config
-    role = ROLE_CONSUMER if "消费者" in str(role_radio) else ROLE_MERCHANT
+    role = _role_from_radio(role_radio)
     username = (username or "").strip()
     ok, msg, r = login_user(role, username, password or "")
     if not ok:
         return (
             gr.update(visible=True), gr.update(visible=False),
-            msg, {}, [], gr.update(choices=[], value=None), "未登录", "", "",
+            msg, {}, [], gr.update(choices=[], value=None), "未登录", "", "", "",
             gr.update(visible=False),
         )
     state = {"role": r, "username": username, "session": DEFAULT_SESSION}
@@ -191,22 +235,93 @@ def do_login(role_radio, username, password):
         gr.update(visible=False), gr.update(visible=True),
         f"✅ {msg}", state, history,
         gr.update(choices=sessions, value=DEFAULT_SESSION),
-        _status_text(state), warn, "",
+        _status_text(state), warn, _usage_guide(r), "",
         gr.update(visible=(r == ROLE_MERCHANT)),
     )
 
 
-def do_register(role_radio, username, password):
+def do_register(role_radio, username, password, security_question, security_answer):
     """注册新账号。
     :param role_radio: 界面角色选择控件提交的值。
     :param username: 用户登录名。
     :param password: 用户提供的登录密码。
+    :param security_question: 用户选定的注册安全问题。
+    :param security_answer: 用户填写的注册安全问题答案。
     :return: 返回函数处理得到的结果。
     """
-    role = ROLE_CONSUMER if "消费者" in str(role_radio) else ROLE_MERCHANT
+    role = _role_from_radio(role_radio)
     username = (username or "").strip()
-    ok, msg = register_user(role, username, password or "")
-    return msg
+    ok, msg = register_user(
+        role, username, password or "", security_question, security_answer or ""
+    )
+    return _account_result(ok, msg)
+
+
+def do_get_security_question(role_radio, username):
+    """查询找回密码所需的安全问题。
+    :param role_radio: 界面角色选择控件提交的值。
+    :param username: 待找回账号的用户名。
+    :return: 返回图标化的安全问题或错误提示。
+    """
+    ok, message = get_security_question(
+        _role_from_radio(role_radio), (username or "").strip()
+    )
+    return _account_result(ok, message)
+
+
+def do_reset_password(role_radio, username, security_answer, new_password, confirm_password):
+    """通过安全问题答案重设未登录账号的密码。
+    :param role_radio: 界面角色选择控件提交的值。
+    :param username: 待找回账号的用户名。
+    :param security_answer: 用户输入的安全问题答案。
+    :param new_password: 用户输入的新密码。
+    :param confirm_password: 用户再次输入的新密码。
+    :return: 返回图标化的密码重设结果。
+    """
+    ok, message = reset_password(
+        _role_from_radio(role_radio),
+        (username or "").strip(),
+        security_answer or "",
+        new_password or "",
+        confirm_password or "",
+    )
+    return _account_result(ok, message)
+
+
+def do_change_password(old_password, new_password, confirm_password, state):
+    """使用当前登录身份修改密码。
+    :param old_password: 用户当前密码。
+    :param new_password: 用户输入的新密码。
+    :param confirm_password: 用户再次输入的新密码。
+    :param state: 界面保存的当前登录及会话状态。
+    :return: 返回图标化的密码修改结果。
+    """
+    if not state or not state.get("username"):
+        return "❌ 请先登录"
+    ok, message = change_password(
+        state["role"],
+        state["username"],
+        old_password or "",
+        new_password or "",
+        confirm_password or "",
+    )
+    return _account_result(ok, message)
+
+
+def do_set_security_question(current_password, question, answer, state):
+    """为当前登录账号设置或更新安全问题。
+    :param current_password: 用户当前密码。
+    :param question: 选定的安全问题。
+    :param answer: 用户输入的安全问题答案。
+    :param state: 界面保存的当前登录及会话状态。
+    :return: 返回图标化的安全问题设置结果。
+    """
+    if not state or not state.get("username"):
+        return "❌ 请先登录"
+    ok, message = set_security_question(
+        state["role"], state["username"], current_password or "", question, answer or ""
+    )
+    return _account_result(ok, message)
 
 
 def chat_respond(message, history, state):
@@ -310,8 +425,13 @@ def relogin():
     """
     return (
         gr.update(visible=True), gr.update(visible=False),
-        "", {}, [], gr.update(choices=[], value=None), "未登录", "", "",
+        "", {}, [], gr.update(choices=[], value=None), "未登录", "", "", "",
         gr.update(visible=False),
+        gr.update(value=""), gr.update(value=SECURITY_QUESTIONS[0]), gr.update(value=""),
+        gr.update(value=""), "", gr.update(value=""), gr.update(value=""), gr.update(value=""),
+        gr.update(value=""), gr.update(value=""), gr.update(value=""),
+        gr.update(value=""), gr.update(value=SECURITY_QUESTIONS[0]), gr.update(value=""),
+        "", "", "",
     )
 
 
@@ -351,8 +471,22 @@ with gr.Blocks(title="电商客服 Agent") as demo:
             with gr.Row():
                 login_btn = gr.Button("登录", variant="primary")
                 register_btn = gr.Button("注册")
+            register_question = gr.Dropdown(
+                SECURITY_QUESTIONS, value=SECURITY_QUESTIONS[0], label="注册安全问题"
+            )
+            register_answer = gr.Textbox(label="注册安全问题答案", type="password")
             login_status = gr.Markdown("")
             gr.Markdown("<small>请输入用户名和密码</small>")
+            with gr.Accordion("🔐 找回密码", open=False):
+                recover_role_radio = gr.Radio(["消费者", "商家"], value="消费者", label="账号角色")
+                recover_username = gr.Textbox(label="用户名")
+                recover_question = gr.Markdown("")
+                recover_question_btn = gr.Button("查询安全问题", size="sm")
+                recover_answer = gr.Textbox(label="安全问题答案", type="password")
+                recover_new_password = gr.Textbox(label="新密码", type="password")
+                recover_confirm_password = gr.Textbox(label="确认新密码", type="password")
+                recover_btn = gr.Button("重设密码")
+                recover_status = gr.Markdown("")
 
     # ===== 主界面视图 =====
     with gr.Row(visible=False) as main_view:
@@ -372,6 +506,24 @@ with gr.Blocks(title="电商客服 Agent") as demo:
                 send_btn = gr.Button("发送", variant="primary", scale=1)
         # 右侧会话管理
         with gr.Column(scale=1, min_width=260):
+            with gr.Accordion("📖 使用说明", open=True):
+                usage_guide = gr.Markdown("")
+            with gr.Accordion("🔐 账号安全", open=False):
+                gr.Markdown("#### 修改密码")
+                change_old_password = gr.Textbox(label="当前密码", type="password")
+                change_new_password = gr.Textbox(label="新密码", type="password")
+                change_confirm_password = gr.Textbox(label="确认新密码", type="password")
+                change_password_btn = gr.Button("修改密码", size="sm")
+                change_password_status = gr.Markdown("")
+                gr.Markdown("#### 设置安全问题")
+                set_question_password = gr.Textbox(label="当前密码", type="password")
+                set_question_dropdown = gr.Dropdown(
+                    SECURITY_QUESTIONS, value=SECURITY_QUESTIONS[0], label="安全问题"
+                )
+                set_question_answer = gr.Textbox(label="安全问题答案", type="password")
+                set_question_btn = gr.Button("保存安全问题", size="sm")
+                set_question_status = gr.Markdown("")
+            gr.Markdown("---")
             gr.Markdown("### 会话管理")
             session_dropdown = gr.Dropdown(label="会话列表", choices=[], interactive=True)
             switch_btn = gr.Button("切换到该会话")
@@ -391,11 +543,26 @@ with gr.Blocks(title="电商客服 Agent") as demo:
     # ===== 事件绑定 =====
     login_outputs = [
         login_view, main_view, login_status, state,
-        chatbot, session_dropdown, status_bar, api_key_warn, password_box,
+        chatbot, session_dropdown, status_bar, api_key_warn, usage_guide, password_box,
         ops_accordion,
     ]
     login_btn.click(do_login, [role_radio, username_box, password_box], login_outputs)
-    register_btn.click(do_register, [role_radio, username_box, password_box], [login_status])
+    register_btn.click(
+        do_register,
+        [role_radio, username_box, password_box, register_question, register_answer],
+        [login_status],
+    )
+    recover_question_btn.click(
+        do_get_security_question, [recover_role_radio, recover_username], [recover_question]
+    )
+    recover_btn.click(
+        do_reset_password,
+        [
+            recover_role_radio, recover_username, recover_answer,
+            recover_new_password, recover_confirm_password,
+        ],
+        [recover_status],
+    )
 
     send_btn.click(chat_respond, [msg_box, chatbot, state], [chatbot, msg_box, status_bar])
     msg_box.submit(chat_respond, [msg_box, chatbot, state], [chatbot, msg_box, status_bar])
@@ -405,7 +572,26 @@ with gr.Blocks(title="电商客服 Agent") as demo:
     refresh_btn.click(refresh_sessions, [state], [session_dropdown])
     clear_cur_btn.click(clear_current, [state], [chatbot, status_bar, state])
     clear_all_btn.click(clear_all_sessions, [state], [chatbot, status_bar, state, session_dropdown])
-    relogin_btn.click(relogin, outputs=login_outputs)
+    change_password_btn.click(
+        do_change_password,
+        [change_old_password, change_new_password, change_confirm_password, state],
+        [change_password_status],
+    )
+    set_question_btn.click(
+        do_set_security_question,
+        [set_question_password, set_question_dropdown, set_question_answer, state],
+        [set_question_status],
+    )
+
+    relogin_outputs = login_outputs + [
+        username_box, register_question, register_answer,
+        recover_username, recover_question, recover_answer,
+        recover_new_password, recover_confirm_password,
+        change_old_password, change_new_password, change_confirm_password,
+        set_question_password, set_question_dropdown, set_question_answer,
+        recover_status, change_password_status, set_question_status,
+    ]
+    relogin_btn.click(relogin, outputs=relogin_outputs)
 
     ops_refresh_btn.click(refresh_ops_panel, [state], [ops_content])
 
