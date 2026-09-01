@@ -216,14 +216,8 @@ try:
         update_result = rag.update_single_goods_vector("SP001")
         failures += _assert(update_result["status"] == "success" and update_result["added"] == 1, "单商品向量更新成功")
         failures += _assert(
-            "goods_SP001_0" in rag.collection.items
-            and "goods_SP001_0" in rag.fallback_collection.items,
-            "单商品更新真实同步主、备用集合状态",
-        )
-        failures += _assert(
-            update_result.get("primary", {}).get("added") == 1
-            and update_result.get("fallback", {}).get("added") == 1,
-            "单商品更新分别报告主、备用结果",
+            "goods_SP001_0" in rag.collection.items,
+            "单商品更新写入主集合",
         )
         failures += _assert(rag.update_single_goods_vector("NOPE")["status"] == "fail", "单商品不存在返回失败")
 
@@ -235,43 +229,26 @@ try:
         rag.collection.items["old_policy"] = {"document": "old", "metadata": {"doc_type": "service_rule"}}
         rag.collection.items["external_keep"] = {"document": "external", "metadata": {"doc_type": "external"}}
         rag.collection.items["legacy_without_type"] = {"document": "legacy", "metadata": {}}
-        rag.fallback_collection.items["old_policy"] = {"document": "old", "metadata": {"doc_type": "service_rule"}}
-        rag.fallback_collection.items["external_keep"] = {"document": "external", "metadata": {"doc_type": "external"}}
-        rag.fallback_collection.items["legacy_without_type"] = {"document": "legacy", "metadata": {}}
         rag.collection.fail_add = True
         rebuild_result = rag.rebuild_all_vectors()
-        failures += _assert(rebuild_result["status"] == "partial", "单库重建异常时返回部分失败")
+        failures += _assert(rebuild_result["status"] == "fail", "主库重建异常时返回失败")
         failures += _assert(
-            rebuild_result.get("primary", {}).get("status") == "fail"
-            and rebuild_result.get("fallback", {}).get("status") == "success",
-            "全量重建分别报告主、备用结果",
+            rebuild_result.get("primary", {}).get("status") == "fail",
+            "全量重建报告主库失败详情",
         )
         failures += _assert("old_policy" in rag.collection.items, "全量重建异常时回滚旧向量")
         failures += _assert("external_keep" in rag.collection.items, "全量重建回滚保留非 RAG 向量")
-        failures += _assert(
-            "old_policy" not in rag.fallback_collection.items
-            and "goods_SP001_0" in rag.fallback_collection.items
-            and "goods_SP002_0" in rag.fallback_collection.items,
-            "主库失败时备用库仍独立完成重建",
-        )
-        failures += _assert(
-            "external_keep" not in rag.fallback_collection.items
-            and "legacy_without_type" not in rag.fallback_collection.items,
-            "备用库全量重建清除旧结构残留向量",
-        )
 
         clear_result = rag.clear_all_goods_vector()
         failures += _assert(
             isinstance(clear_result, dict)
             and clear_result.get("status") == "success"
-            and clear_result.get("primary", {}).get("deleted") == 2
-            and clear_result.get("fallback", {}).get("deleted") == 2,
-            "清空商品向量分别报告主、备用删除数",
+            and clear_result.get("primary", {}).get("deleted") == 2,
+            "清空商品向量报告主库删除数",
         )
         failures += _assert(
-            all(item["metadata"].get("doc_type") != "goods_info" for item in rag.collection.items.values())
-            and all(item["metadata"].get("doc_type") != "goods_info" for item in rag.fallback_collection.items.values()),
-            "清空商品向量真实删除两个集合的数据",
+            all(item["metadata"].get("doc_type") != "goods_info" for item in rag.collection.items.values()),
+            "清空商品向量真实删除主集合数据",
         )
 
         rag.collection.items = {
@@ -281,36 +258,23 @@ try:
             }
         }
         primary_before_snapshot_failure = dict(rag.collection.items)
-        rag.fallback_collection.items = {
-            "fallback_old": {
-                "document": "fallback old",
-                "metadata": {"doc_type": "service_rule"},
-            }
-        }
         rag.collection.fail_snapshot = True
         try:
             snapshot_failure_result = rag.rebuild_all_vectors()
         except Exception as exc:
             snapshot_failure_result = {"raised": str(exc)}
         failures += _assert(
-            snapshot_failure_result.get("status") == "partial",
-            "主库快照失败时整体返回部分失败而非抛异常",
+            snapshot_failure_result.get("status") == "fail",
+            "主库快照失败时整体返回失败而非抛异常",
         )
         failures += _assert(
             snapshot_failure_result.get("primary", {}).get("status") == "fail"
-            and "snapshot failed" in snapshot_failure_result.get("primary", {}).get("msg", "")
-            and snapshot_failure_result.get("fallback", {}).get("status") == "success",
-            "快照失败结果可诊断且备用库仍成功",
+            and "snapshot failed" in snapshot_failure_result.get("primary", {}).get("msg", ""),
+            "快照失败结果可诊断",
         )
         failures += _assert(
             rag.collection.items == primary_before_snapshot_failure,
             "快照失败的主库不删除数据也不执行无快照回滚",
-        )
-        failures += _assert(
-            "fallback_old" not in rag.fallback_collection.items
-            and "goods_SP001_0" in rag.fallback_collection.items
-            and "goods_SP002_0" in rag.fallback_collection.items,
-            "主库快照失败时备用库仍独立完成重建",
         )
     finally:
         _restore_modules(old)
@@ -318,5 +282,5 @@ finally:
     _cleanup_test_runtime_dir(WORKTREE_TEMP_DIR)
 
 print("=" * 60)
-print(f"  通过: {24 - failures}  失败: {failures}  总计: 24")
+print(f"  通过: {18 - failures}  失败: {failures}  总计: 18")
 raise SystemExit(1 if failures else 0)

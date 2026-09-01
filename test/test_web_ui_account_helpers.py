@@ -2,9 +2,7 @@
 
 import importlib
 import os
-import queue
 import sys
-import time
 import types
 import unittest
 import uuid
@@ -367,166 +365,20 @@ class WebUiAccountHelperTests(unittest.TestCase):
         ]
         self.assertGreaterEqual(len(cleared_values), 8)
 
-    def test_chat_control_callbacks_switch_buttons_and_report_timeout(self):
-        """按钮状态未切换或超时提示错误时，本用例应失败。"""
-        started = self.ui.start_chat_request()
-        request_id = started[3]
-        finished = self.ui.finish_chat_request(request_id)
-        timed_out = self.ui.stop_chat_request(request_id, True)
-        manually_stopped = self.ui.stop_chat_request(request_id, False)
-
-        self.assertEqual(started[0], {"__type__": "update", "visible": False})
-        self.assertEqual(started[1], {"__type__": "update", "visible": True})
-        self.assertEqual(started[2], {"__type__": "update", "active": True})
-        self.assertTrue(request_id)
-        self.assertEqual(finished[0], {"__type__": "update", "visible": True})
-        self.assertEqual(finished[1], {"__type__": "update", "visible": False})
-        self.assertEqual(finished[2], {"__type__": "update", "active": False})
-        self.assertEqual(
-            timed_out[3],
-            "请求已超时（已超过45秒），已自动终止，这不是你的问题",
-        )
-        self.assertEqual(manually_stopped[3], "已终止当前请求")
-        self.assertEqual(manually_stopped[4], "")
-
-    def test_stop_chat_request_terminates_a_running_worker(self):
-        """点击终止只隐藏结果但不结束子进程时，本用例应失败。"""
-        class RunningProcess:
-            def __init__(self):
-                self.terminated = False
-                self.joined = False
-
-            def is_alive(self):
-                return not self.terminated
-
-            def terminate(self):
-                self.terminated = True
-
-            def join(self, timeout=None):
-                self.joined = True
-
-        process = RunningProcess()
-        request_id = "running-request"
-        self.ui._ACTIVE_CHAT_REQUESTS[request_id] = (process, None)
-
-        self.ui.stop_chat_request(request_id, False)
-
-        self.assertTrue(process.terminated)
-        self.assertTrue(process.joined)
-        self.assertNotIn(request_id, self.ui._ACTIVE_CHAT_REQUESTS)
-
-    def test_stop_chat_request_kills_a_real_spawned_process(self):
-        """Windows spawn 子进程必须在终止回调后实际退出。"""
-        process = self.ui._CHAT_PROCESS_CONTEXT.Process(target=time.sleep, args=(30,))
-        process.start()
-        request_id = "spawned-request"
-        self.ui._ACTIVE_CHAT_REQUESTS[request_id] = (process, None)
-
-        self.ui.stop_chat_request(request_id, False)
-
-        self.assertFalse(process.is_alive())
-        self.assertNotIn(request_id, self.ui._ACTIVE_CHAT_REQUESTS)
-
-    def test_subprocess_wait_enforces_the_backend_deadline(self):
-        """即使浏览器计时器失效，后端也必须在截止时间终止任务。"""
-        class EmptyQueue:
-            def get(self, timeout=None):
-                raise queue.Empty
-
-            def close(self):
-                pass
-
-            def join_thread(self):
-                pass
-
-        class RunningProcess:
-            def __init__(self):
-                self.terminated = False
-
-            def start(self):
-                pass
-
-            def is_alive(self):
-                return not self.terminated
-
-            def terminate(self):
-                self.terminated = True
-
-            def join(self, timeout=None):
-                pass
-
-        process = RunningProcess()
-        context = types.SimpleNamespace(
-            Queue=lambda: EmptyQueue(),
-            Process=lambda **kwargs: process,
-        )
+    def test_chat_uses_in_process_agent_and_never_renders_blank_answer(self):
+        """聊天必须复用当前进程，并将空模型输出转换为明确提示。"""
         state = {
             "session": "默认会话",
             "role": auth_login.ROLE_CONSUMER,
             "username": "alice",
         }
+        with patch.object(self.ui, "run_agent", return_value="   ") as run_mock:
+            history, cleared, _status = self.ui.chat_respond("查询水杯", [], state)
 
-        with patch.object(self.ui, "_CHAT_PROCESS_CONTEXT", context), patch.object(
-            self.ui, "CHAT_TIMEOUT_SECONDS", 0
-        ):
-            answer, status = self.ui._run_chat_in_subprocess(
-                "question", state, "deadline-request"
-            )
-
-        self.assertIsNone(answer)
-        self.assertEqual(status, "请求已超时（已超过45秒），已自动终止，这不是你的问题")
-        self.assertTrue(process.terminated)
-
-    def test_agent_worker_returns_answer_or_error_through_queue(self):
-        """子进程入口未通过队列回传回答或异常时，本用例应失败。"""
-        class ResultQueue:
-            def __init__(self):
-                self.items = []
-
-            def put(self, value):
-                self.items.append(value)
-
-        result_queue = ResultQueue()
-        agent_module = sys.modules["agent.main_agent"]
-        agent_module.run_agent = lambda *args, **kwargs: "worker-answer"
-
-        self.ui.run_agent_process(
-            result_queue,
-            "question",
-            "默认会话",
-            auth_login.ROLE_CONSUMER,
-            "alice",
-        )
-        self.assertEqual(result_queue.items, [("ok", "worker-answer")])
-
-        def raise_error(*args, **kwargs):
-            raise RuntimeError("worker-error")
-
-        agent_module.run_agent = raise_error
-        self.ui.run_agent_process(
-            result_queue,
-            "question",
-            "默认会话",
-            auth_login.ROLE_CONSUMER,
-            "alice",
-        )
-        self.assertEqual(result_queue.items[-1], ("error", "worker-error"))
-
-    def test_chat_stop_and_timeout_events_cancel_each_send_path(self):
-        """停止事件遗漏点击发送或回车发送任务时，本用例应失败。"""
-        stop_event = self.ui.stop_btn.events[0]
-        timeout_event = self.ui.request_timer.events[0]
-
-        self.assertEqual(stop_event["fn"].__name__, "stop_chat_request")
-        self.assertEqual(timeout_event["fn"].__name__, "stop_chat_request")
-        self.assertEqual(stop_event["cancels"], self.ui.chat_events)
-        self.assertEqual(timeout_event["cancels"], self.ui.chat_events)
-        self.assertEqual(stop_event["inputs"], [self.ui.request_id])
-        self.assertEqual(
-            timeout_event["inputs"], [self.ui.request_id, self.ui.timeout_flag]
-        )
-        self.assertEqual(self.ui.request_timer.args[0], 45)
-        self.assertFalse(self.ui.request_timer.kwargs["active"])
+        run_mock.assert_called_once()
+        self.assertEqual(cleared, "")
+        self.assertIn("模型返回空内容", history[-1]["content"])
+        self.assertFalse(hasattr(self.ui, "_CHAT_PROCESS_CONTEXT"))
 
 
 if __name__ == "__main__":

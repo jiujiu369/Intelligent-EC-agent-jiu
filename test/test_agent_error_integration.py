@@ -55,6 +55,19 @@ failures += _assert("业务问题" in main_agent.run_agent("你好", use_memory=
 
 old_llm = main_agent.llm_client
 try:
+    main_agent.llm_client = FakeLLM([{
+        "choices": [{"message": {"role": "assistant", "content": "   "}}]
+    }])
+    blank_answer = main_agent.run_agent("查询水杯", use_memory=False)
+    failures += _assert(
+        "模型返回空内容" in blank_answer,
+        "模型返回纯空白时给出明确提示而不是空气泡",
+    )
+finally:
+    main_agent.llm_client = old_llm
+
+old_llm = main_agent.llm_client
+try:
     main_agent.llm_client = FakeLLM([
         {
             "choices": [
@@ -103,5 +116,5 @@ with open(session_path, "r", encoding="utf-8") as f:
 os.remove(session_path)
 
 print("=" * 60)
-print(f"  通过: {5 - failures}  失败: {failures}  总计: 5")
+print(f"  通过: {6 - failures}  失败: {failures}  总计: 6")
 raise SystemExit(1 if failures else 0)

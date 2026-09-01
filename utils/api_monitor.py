@@ -123,7 +123,9 @@ class CloudLLMClient:
                 if attempt < self.max_retry:
                     time.sleep(min(2 ** attempt, 4))
                     continue
-                return llm_fallback_response(BUSY_MESSAGE)
+                return llm_fallback_response(
+                    f"API 请求超时（单次等待上限 {self.timeout} 秒，已重试 {self.max_retry} 次），请稍后重试"
+                )
 
             except requests.exceptions.HTTPError as e:
                 status_code = getattr(e.response, "status_code", None)

@@ -10,7 +10,7 @@
 | --- | --- |
 | 登录与权限 | 买家、商家两种角色；支持注册、登录、忘记/找回密码、登录后修改密码和设置安全问题。 |
 | 业务工具 | 商品、库存、订单查询；售后工单创建；商品更新；销售报表导出。 |
-| RAG | 主、备用两个独立的 512 维 BGE small 向量库，共用模型实例并保留关键词降级检索。 |
+| RAG | 单个 512 维 BGE small 主向量库，并保留低内存的关键词降级检索。 |
 | 会话 | 按 `role + username` 隔离会话；支持新建、切换、清空与超长会话摘要。 |
 | 界面 | CLI 与 Gradio 图形界面；买家、商家分别显示对应能力说明和示例，商家可查看运维状态。 |
 | 运行保障 | 环境变量配置、限流、缓存、日志、输入校验与 API 异常兜底。 |
@@ -30,11 +30,10 @@
 实现位于 `embedding/rag_pipeline.py`。
 
 1. 优先查询 512 维主向量库（`datas/chroma_db_512`）。
-2. 主库异常或无结果时，尝试独立的 512 维备用库（`datas/chroma_db_fallback_512`）。
-3. 向量库可用但无结果或相似度过低时，尝试关键词降级检索。
-4. 两个向量库都不可用时，返回“暂未找到相关知识，建议联系人工客服”。
+2. 主库异常、无结果或相似度过低时，尝试关键词降级检索。
+3. 关键词检索仍无结果时，返回“暂未找到相关知识，建议联系人工客服”。
 
-主模型与备用模型均为 `BAAI/bge-small-zh-v1.5`（512 维），分别使用独立 ChromaDB 目录，并在同一进程内共用一个 embedding 实例；`models/` 下存在同名目录时优先使用本地模型。
+主模型为 `BAAI/bge-small-zh-v1.5`（512 维）；`models/` 下存在同名目录时优先使用本地模型。
 
 ## 回答风险检测：适用范围与限制
 
@@ -82,15 +81,14 @@ $env:AGENT_BASE_URL="https://你的服务商地址/v1"
 $env:AGENT_MODEL_NAME="你的模型名"
 ```
 
-配置主、备用嵌入模型（两者均使用 BGE small 512 维模型）：
+配置主嵌入模型：
 
 ```dotenv
 AGENT_RAG_EMBEDDING_MODEL=BAAI/bge-small-zh-v1.5
 AGENT_RAG_PRIMARY_MODEL=BAAI/bge-small-zh-v1.5
-AGENT_RAG_FALLBACK_MODEL=BAAI/bge-small-zh-v1.5
 ```
 
-构建主、备用两个独立向量库：
+构建主向量库：
 
 ```powershell
 python embedding\\rag_pipeline.py
@@ -118,7 +116,6 @@ Gradio 默认地址为 `http://127.0.0.1:7860`。
 | `AGENT_MODEL_NAME` | `API.model_name` |
 | `AGENT_RAG_PRIMARY_MODEL` | `RAG.embedding_model` |
 | `AGENT_RAG_DISTANCE_THRESHOLD` | `RAG.distance_threshold` |
-| `AGENT_RAG_FALLBACK_MODEL` | `RAG.fallback_model` |
 
 不要将真实 API Key 提交到仓库。
 
@@ -140,7 +137,7 @@ Gradio 默认地址为 `http://127.0.0.1:7860`。
 | 通过 | 23 |
 | 失败 | 0 |
 
-测试覆盖账号安全、买家/商家 RBAC、买家订单隔离、双 512 维向量库独立初始化与重建、共享模型实例、配置优先级、UI 账号辅助逻辑、日志、限流和回答风险检测。测试会写入部分临时状态文件，运行前仍建议备份需要保留的本地账号、会话或业务数据。
+测试覆盖账号安全、买家/商家 RBAC、买家订单隔离、单 512 维主向量库初始化与重建、空回复保护、配置优先级、UI 账号辅助逻辑、日志、限流和回答风险检测。测试会写入部分临时状态文件，运行前仍建议备份需要保留的本地账号、会话或业务数据。
 
 ## 目录结构
 

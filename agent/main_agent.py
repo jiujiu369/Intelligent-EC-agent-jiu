@@ -504,6 +504,11 @@ def _finalize_answer(answer: str, input_notice: str, tool_results: List, session
     :param user_query: 传入 ``user_query`` 的业务数据。
     :return: 返回函数处理得到的结果。
     """
+    if answer is None or not str(answer).strip():
+        logger.error("模型返回空内容", extra={"session_name": session_name})
+        answer = "⚠️ 模型返回空内容，请稍后重试；本次请求未生成有效回答。"
+    else:
+        answer = str(answer).strip()
     check_result = check_hallucination(answer, tool_results, session_name=session_name)
     logger.info(
         f"幻觉检测 score={check_result['score']} risk={check_result['risk']} ratio={check_result['session_stats']['risk_ratio']}",

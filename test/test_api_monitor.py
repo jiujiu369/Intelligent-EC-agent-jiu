@@ -97,7 +97,10 @@ failures += _assert(_content(result) == "系统繁忙，请稍后再试", "5xx �
 failures += _assert(sleeps == [1, 2, 4], "5xx 使用 1/2/4 秒指数退避")
 
 result, _ = _run_with(lambda **kwargs: (_ for _ in ()).throw(requests.exceptions.Timeout()), max_retry=1)
-failures += _assert(_content(result) == "系统繁忙，请稍后再试", "网络超时独立捕获并降级")
+failures += _assert(
+    "API 请求超时" in _content(result) and "1 秒" in _content(result),
+    "网络超时返回包含具体时限的明确提示",
+)
 
 print("=" * 60)
 print(f"  通过: {7 - failures}  失败: {failures}  总计: 7")

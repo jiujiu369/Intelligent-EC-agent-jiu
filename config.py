@@ -44,7 +44,6 @@ PATHS: Dict[str, Any] = {
     "datas_dir": "datas",
     "docs_dir": "datas/docs",
     "chroma_persist_dir": "datas/chroma_db_512",
-    "chroma_persist_dir_fallback": "datas/chroma_db_fallback_512",
     "agent_memory_dir": "agent_memory",
     "log_dir": "logs",
     "goods_json": "datas/货品基础数据.json",
@@ -57,7 +56,6 @@ PATHS: Dict[str, Any] = {
 
 RAG: Dict[str, Any] = {
     "embedding_model": _model_path("bge-small-zh-v1.5"),
-    "fallback_model": _model_path("bge-small-zh-v1.5"),
     "chunk_size": 384,
     "chunk_overlap": 64,
     "distance_threshold": 1.5,
@@ -111,12 +109,11 @@ class Config:
         """
         explicit_env_names = {
             ("RAG", "embedding_model"): "AGENT_RAG_PRIMARY_MODEL",
-            ("RAG", "fallback_model"): "AGENT_RAG_FALLBACK_MODEL",
         }
         env_names = (
-            explicit_env_names.get((section, key)),
             f"AGENT_{key.upper()}",
             f"AGENT_{section}_{key.upper()}",
+            explicit_env_names.get((section, key)),
         )
         for env_name in env_names:
             if env_name and env_name in os.environ:

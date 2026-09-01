@@ -25,13 +25,10 @@ logger = get_logger(__name__)
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 BASE_DIR = os.path.join(PROJECT_ROOT, config.get("PATHS", "datas_dir"))#RAG项目数据
 CHROMA_PERSIST_PATH = os.path.join(PROJECT_ROOT, config.get("PATHS", "chroma_persist_dir"))
-FALLBACK_CHROMA_PERSIST_PATH = os.path.join(PROJECT_ROOT, config.get("PATHS", "chroma_persist_dir_fallback"))
 DOC_FOLDER_PATH = os.path.join(PROJECT_ROOT, config.get("PATHS", "docs_dir"))#项目数据地址
 GOODS_JSON_PATH = os.path.join(PROJECT_ROOT, config.get("PATHS", "goods_json")) # 新增商品json路径
 COLLECTION_NAME = "customer_service_docs_512"
-FALLBACK_COLLECTION_NAME = "customer_service_docs_fallback_512"
 PRIMARY_MODEL_NAME = config.get("RAG", "embedding_model")
-FALLBACK_MODEL_NAME = config.get("RAG", "fallback_model")
 
 #=================加载本地embedding模型=====================
 def _load_embedding_function(model_name: str, label: str):
@@ -100,20 +97,6 @@ embedding_fn, chroma_client, collection, chroma_connection_failed = _init_chroma
     COLLECTION_NAME,
     "primary-512",
 )
-#=========相同模型时复用 embedding 实例，备用库失效则兜底 jieba 关键词检索===============
-shared_fallback_embedding_fn = (
-    embedding_fn
-    if _resolve_model_name(PRIMARY_MODEL_NAME) == _resolve_model_name(FALLBACK_MODEL_NAME)
-    else None
-)
-fallback_embedding_fn, fallback_chroma_client, fallback_collection, fallback_chroma_connection_failed = _init_chroma_collection(
-    FALLBACK_MODEL_NAME,
-    FALLBACK_CHROMA_PERSIST_PATH,
-    FALLBACK_COLLECTION_NAME,
-    "fallback-512",
-    embedding_function=shared_fallback_embedding_fn,
-)
-
 # ===================== 文件读取函数 =====================
 #文件清洗函数
 def clean_text(raw_text: str) -> str:
@@ -428,12 +411,6 @@ def build_vector_db_docs():
     return _build_vector_db_docs_for(collection, "primary-512")
 
 
-def build_vector_db_docs_fallback():
-    """将政策文档写入备用 512 维向量集合。
-    :return: 返回完成读取、构建或转换后的结果。
-    """
-    return _build_vector_db_docs_for(fallback_collection, "fallback-512")
-
 # =====================【新增】商品信息入库 =====================
 def _build_vector_db_goods_for(target_collection, label: str):
     """执行 ``_build_vector_db_goods_for`` 对应的项目处理逻辑。
@@ -480,13 +457,6 @@ def build_vector_db_goods():
     return _build_vector_db_goods_for(collection, "primary-512")
 
 
-def build_vector_db_goods_fallback():
-    """将商品信息写入备用 512 维向量集合。
-    :return: 返回完成读取、构建或转换后的结果。
-    """
-    return _build_vector_db_goods_for(fallback_collection, "fallback-512")
-
-
 def _is_meaningless_rag_query(query: str) -> bool:
     """判断查询是否缺少可用于知识库检索的有效语义。
     :param query: 传入 ``query`` 的业务数据。
@@ -507,7 +477,7 @@ def _is_meaningless_rag_query(query: str) -> bool:
 
 # =====================【改造】RAG检索入口，支持类型过滤 =====================
 def rag_search(query: str, top_k: int = 5, doc_type: str = None) -> List[Dict]:
-    """依次使用主向量库、备用向量库和关键词策略检索知识。
+    """优先使用主向量库，异常或无结果时降级到关键词检索。
     :param query: 传入 ``query`` 的业务数据。
     :param top_k: 传入 ``top_k`` 的业务数据。
     :param doc_type: 传入 ``doc_type`` 的业务数据。
@@ -519,35 +489,15 @@ def rag_search(query: str, top_k: int = 5, doc_type: str = None) -> List[Dict]:
 
     if collection is None:
         logger.error(f"ChromaDB不可用，RAG降级 query={query} top_k={top_k}")
-        if fallback_collection is None:
-            return rag_fallback_result()
-        return fallback_vector_search(query, top_k, doc_type)
+        return fallback_keyword_search(query, top_k)
     try:
         filtered = _search_collection(collection, query, top_k, doc_type, "primary-512")
         if not filtered:
-            return fallback_vector_search(query, top_k, doc_type)
+            return fallback_keyword_search(query, top_k)
         return filtered
     except Exception as e:
         logger.error(f"RAG检索异常 query={query} top_k={top_k} error={e}")
-        return fallback_vector_search(query, top_k, doc_type)
-
-
-def fallback_vector_search(query: str, top_k: int = 5, doc_type: str = None) -> List[Dict]:
-    """使用备用向量集合执行相似度检索。
-    :param query: 传入 ``query`` 的业务数据。
-    :param top_k: 传入 ``top_k`` 的业务数据。
-    :param doc_type: 传入 ``doc_type`` 的业务数据。
-    :return: 返回函数处理得到的结果。
-    """
-    if fallback_collection is None:
-        return rag_fallback_result()
-    try:
-        filtered = _search_collection(fallback_collection, query, top_k, doc_type, "fallback-512")
-        if filtered:
-            return filtered
-    except Exception as e:
-        logger.error(f"fallback-512 RAG检索异常 query={query} top_k={top_k} error={e}")
-    return fallback_keyword_search(query, top_k)
+        return fallback_keyword_search(query, top_k)
 
 
 def _search_collection(target_collection, query: str, top_k: int, doc_type: str, label: str) -> List[Dict]:
@@ -634,7 +584,7 @@ def _update_goods_in_collection(target_collection, label: str, target_goods: Dic
 
 
 def update_single_goods_vector(goods_id: str) -> Dict:
-    """同步更新指定商品在主库和备用库中的向量记录。
+    """更新指定商品在主向量库中的记录。
     :param goods_id: 商品的唯一编号。
     :return: 返回函数处理得到的结果。
     """
@@ -651,22 +601,13 @@ def update_single_goods_vector(goods_id: str) -> Dict:
     primary_result = _update_goods_in_collection(
         collection, "primary-512", target_goods
     )
-    fallback_result = _update_goods_in_collection(
-        fallback_collection, "fallback-512", target_goods
-    )
-    successes = sum(
-        result["status"] == "success"
-        for result in (primary_result, fallback_result)
-    )
-    status = "success" if successes == 2 else "partial" if successes else "fail"
     return {
-        "status": status,
+        "status": primary_result["status"],
         "goods_id": target_goods["商品ID"],
         "deleted": primary_result.get("deleted", 0),
         "added": primary_result.get("added", 0),
         "skipped": primary_result.get("skipped", 0),
         "primary": primary_result,
-        "fallback": fallback_result,
     }
 
 
@@ -708,21 +649,15 @@ def _rebuild_collection(target_collection, label: str) -> Dict:
 
 
 def rebuild_all_vectors() -> Dict:
-    """重新构建主库和备用库的全部文档及商品向量。
+    """重新构建主库的全部文档及商品向量。
     :return: 返回函数处理得到的结果。
     """
     docs_count = len(load_all_docs(DOC_FOLDER_PATH))
     goods_count = len(load_goods_json())
     logger.info(f"开始全量重建向量 docs={docs_count} goods={goods_count}")
     primary_result = _rebuild_collection(collection, "primary-512")
-    fallback_result = _rebuild_collection(fallback_collection, "fallback-512")
-    successes = sum(
-        result["status"] == "success"
-        for result in (primary_result, fallback_result)
-    )
-    status = "success" if successes == 2 else "partial" if successes else "fail"
     return {
-        "status": status,
+        "status": primary_result["status"],
         "docs_count": docs_count,
         "goods_count": goods_count,
         "docs_added": primary_result.get("docs_added", 0),
@@ -730,7 +665,6 @@ def rebuild_all_vectors() -> Dict:
         "goods_added": primary_result.get("goods_added", 0),
         "goods_skipped": primary_result.get("goods_skipped", 0),
         "primary": primary_result,
-        "fallback": fallback_result,
     }
 
 
@@ -855,28 +789,19 @@ def _clear_goods_in_collection(target_collection, label: str) -> Dict:
 
 
 def clear_all_goods_vector():
-    """删除主、备用集合中所有 ``doc_type=goods_info`` 的数据。"""
+    """删除主集合中所有 ``doc_type=goods_info`` 的数据。"""
     primary_result = _clear_goods_in_collection(collection, "primary-512")
-    fallback_result = _clear_goods_in_collection(fallback_collection, "fallback-512")
-    successes = sum(
-        result["status"] == "success"
-        for result in (primary_result, fallback_result)
-    )
-    status = "success" if successes == 2 else "partial" if successes else "fail"
     return {
-        "status": status,
+        "status": primary_result["status"],
         "primary": primary_result,
-        "fallback": fallback_result,
     }
 
 # ===================== 本地调试 =====================
 if __name__ == "__main__":
-    # 1. 导入主、备用政策文档
+    # 1. 导入主库政策文档
     build_vector_db_docs()
-    build_vector_db_docs_fallback()
-    # 2. 导入主、备用商品信息
+    # 2. 导入主库商品信息
     build_vector_db_goods()
-    build_vector_db_goods_fallback()
 
     # 测试1：只检索商品信息
     print("\n====【测试：商品检索】====")

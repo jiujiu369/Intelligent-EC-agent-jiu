@@ -1,4 +1,4 @@
-# RAG 主、备用 512 维库测试：两个集合共用一个小模型实例
+# RAG 单主库测试：只初始化一个模型和一个集合
 import importlib.util
 import os
 import sys
@@ -43,7 +43,6 @@ class FakeEmbeddingFunction:
 
 
 primary_path = os.path.abspath("isolated-primary-512")
-fallback_path = os.path.abspath("isolated-fallback-512")
 init_calls = []
 init_labels = []
 embedding_instances = []
@@ -56,13 +55,11 @@ def _get_config(section, key, default=None):
     values = {
         ("PATHS", "datas_dir"): "datas",
         ("PATHS", "chroma_persist_dir"): primary_path,
-        ("PATHS", "chroma_persist_dir_fallback"): fallback_path,
         ("PATHS", "chroma_persist_dir_384"): "legacy-fallback-384",
         ("PATHS", "docs_dir"): "datas/docs",
         ("PATHS", "goods_json"): "datas/goods.json",
         ("PATHS", "log_dir"): "logs",
         ("RAG", "embedding_model"): "BAAI/bge-small-zh-v1.5",
-        ("RAG", "fallback_model"): "BAAI/bge-small-zh-v1.5",
         ("RAG", "chunk_size"): 384,
         ("RAG", "chunk_overlap"): 64,
         ("RAG", "distance_threshold"): 1.5,
@@ -151,25 +148,19 @@ try:
     resolved_bge_path = "BAAI/bge-small-zh-v1.5"
     failures += _assert(init_calls == [
         (resolved_bge_path, primary_path, "customer_service_docs_512"),
-        (resolved_bge_path, fallback_path, "customer_service_docs_fallback_512"),
-    ], "主、备用 RAG 使用独立的 512 维集合初始化")
+    ], "RAG 只初始化一个主集合")
     failures += _assert(
-        len(embedding_instances) == 1
-        and collection_embedding_functions[0] is collection_embedding_functions[1],
-        "两个 512 维集合只加载一次并共用同一个 embedding 实例",
+        len(embedding_instances) == 1 and len(collection_embedding_functions) == 1,
+        "只加载一个 embedding 模型实例",
     )
 
-    has_fallback_builders = all(hasattr(module, name) for name in [
-        "build_vector_db_docs_fallback", "build_vector_db_goods_fallback",
-    ])
-    failures += _assert(has_fallback_builders, "提供备用 512 维入库入口")
-    if has_fallback_builders:
-        failures += _assert(module.build_vector_db_docs_fallback() == (1, 0), "备用政策文档入库返回统计")
-        failures += _assert(module.build_vector_db_goods_fallback() == (1, 0), "备用商品入库返回统计")
-        failures += _assert(
-            not module.collection.items and len(module.fallback_collection.items) == 2,
-            "备用入库只写入 fallback_collection",
-        )
+    failures += _assert(
+        not hasattr(module, "fallback_collection"),
+        "不再创建备用向量集合",
+    )
+    failures += _assert(module.build_vector_db_docs() == (1, 0), "主库政策文档入库返回统计")
+    failures += _assert(module.build_vector_db_goods() == (1, 0), "主库商品入库返回统计")
+    failures += _assert(len(module.collection.items) == 2, "文档和商品只写入主库")
 finally:
     for name, saved_module in old_modules.items():
         if saved_module is None:
