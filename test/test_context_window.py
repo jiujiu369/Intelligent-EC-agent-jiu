@@ -13,7 +13,7 @@ fake_rag = types.ModuleType("embedding.rag_pipeline")
 fake_rag.rag_search = lambda *args, **kwargs: []
 sys.modules["embedding.rag_pipeline"] = fake_rag
 
-import agent.main_agent as main_agent
+import main_agent
 from tools.rbac import ROLE_CONSUMER, ROLE_MERCHANT
 
 

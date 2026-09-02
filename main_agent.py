@@ -307,31 +307,61 @@ def print_recent_chat_records(
 
 def run_agent(user_query: str, session_name: str = DEFAULT_SESSION,
               current_role: str = ROLE_CONSUMER, use_memory: bool = True,
-              current_username: Optional[str] = None) -> str:
+              current_username: Optional[str] = None,
+              persist_result: bool = True) -> str:
     """执行 Agent 请求，并将异常转换为用户可读回答。
     :param user_query: 传入 ``user_query`` 的业务数据。
     :param session_name: 用于隔离上下文的会话名称。
     :param current_role: 传入 ``current_role`` 的业务数据。
     :param use_memory: 传入 ``use_memory`` 的业务数据。
     :param current_username: 传入 ``current_username`` 的业务数据。
+    :param persist_result: 是否在本次执行中写入会话记忆和重复查询缓存。
     :return: 返回函数处理得到的结果。
     """
     try:
-        return _run_agent(user_query, session_name, current_role, use_memory, current_username)
+        return _run_agent(
+            user_query, session_name, current_role, use_memory,
+            current_username, persist_result,
+        )
     except Exception as exc:
         logger.error(f"Agent执行异常 error={exc}", extra={"session_name": get_session_label(session_name, current_username, current_role)})
         return LOST_MESSAGE
 
 
+def run_agent_worker(result_queue, message: str, session_name: str,
+                     current_role: str, current_username: str) -> None:
+    """供 Web UI spawn 子进程调用，结果由父进程确认后再持久化。
+    :param result_queue: multiprocessing 结果队列。
+    :param message: 用户消息。
+    :param session_name: 会话名称。
+    :param current_role: 当前角色。
+    :param current_username: 当前用户名。
+    :return: 无返回值，结果写入队列。
+    """
+    try:
+        answer = run_agent(
+            message,
+            session_name=session_name,
+            current_role=current_role,
+            current_username=current_username,
+            persist_result=False,
+        )
+        result_queue.put(("ok", answer))
+    except BaseException as exc:
+        result_queue.put(("error", str(exc)))
+
+
 def _run_agent(user_query: str, session_name: str = DEFAULT_SESSION,
                current_role: str = ROLE_CONSUMER, use_memory: bool = True,
-               current_username: Optional[str] = None) -> str:
+               current_username: Optional[str] = None,
+               persist_result: bool = True) -> str:
     """执行 ``_run_agent`` 对应的项目处理逻辑。
     :param user_query: 传入 ``user_query`` 的业务数据。
     :param session_name: 用于隔离上下文的会话名称。
     :param current_role: 传入 ``current_role`` 的业务数据。
     :param use_memory: 传入 ``use_memory`` 的业务数据。
     :param current_username: 传入 ``current_username`` 的业务数据。
+    :param persist_result: 是否在本次执行中写入会话记忆和重复查询缓存。
     :return: 返回函数处理得到的结果。
     """
     scoped_session = get_session_label(session_name, current_username, current_role)
@@ -392,8 +422,12 @@ def _run_agent(user_query: str, session_name: str = DEFAULT_SESSION,
         # 情况1：不需要调用工具，直接输出回答
         if "tool_calls" not in message or message["tool_calls"] is None:
             messages.append(message)
-            save_memory(messages, session_name, username=current_username, role=current_role)
-            return _finalize_answer(message["content"], input_notice, tool_results, scoped_session, user_query)
+            if persist_result:
+                save_memory(messages, session_name, username=current_username, role=current_role)
+            return _finalize_answer(
+                message["content"], input_notice, tool_results, scoped_session,
+                user_query, persist_result=persist_result,
+            )
 
         # 情况2：需要调用工具
         messages.append(message)
@@ -480,8 +514,12 @@ def _run_agent(user_query: str, session_name: str = DEFAULT_SESSION,
                 "content": tool_content
             })
 
-    save_memory(messages, session_name, username=current_username, role=current_role)
-    return _finalize_answer("已达到最大工具调用轮次，无法完成查询", input_notice, tool_results, scoped_session, user_query)
+    if persist_result:
+        save_memory(messages, session_name, username=current_username, role=current_role)
+    return _finalize_answer(
+        "已达到最大工具调用轮次，无法完成查询", input_notice, tool_results,
+        scoped_session, user_query, persist_result=persist_result,
+    )
 
 
 def _with_input_notice(answer: str, input_notice: str = None) -> str:
@@ -495,13 +533,16 @@ def _with_input_notice(answer: str, input_notice: str = None) -> str:
     return answer
 
 
-def _finalize_answer(answer: str, input_notice: str, tool_results: List, session_name: str, user_query: str) -> str:
+def _finalize_answer(answer: str, input_notice: str, tool_results: List,
+                     session_name: str, user_query: str,
+                     persist_result: bool = True) -> str:
     """完成回答风险检查、上下文保存和输出整理。
     :param answer: 待检查或处理的回答文本。
     :param input_notice: 传入 ``input_notice`` 的业务数据。
     :param tool_results: 传入 ``tool_results`` 的业务数据。
     :param session_name: 用于隔离上下文的会话名称。
     :param user_query: 传入 ``user_query`` 的业务数据。
+    :param persist_result: 是否写入重复查询缓存。
     :return: 返回函数处理得到的结果。
     """
     if answer is None or not str(answer).strip():
@@ -515,7 +556,8 @@ def _finalize_answer(answer: str, input_notice: str, tool_results: List, session
         extra={"session_name": session_name},
     )
     final_answer = _with_input_notice(answer, input_notice)
-    remember_query_answer(session_name, user_query, final_answer)
+    if persist_result:
+        remember_query_answer(session_name, user_query, final_answer)
     return final_answer
 
 

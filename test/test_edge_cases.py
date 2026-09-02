@@ -16,7 +16,7 @@ fake_rag = types.ModuleType("embedding.rag_pipeline")
 fake_rag.rag_search = lambda *args, **kwargs: []
 sys.modules["embedding.rag_pipeline"] = fake_rag
 
-from agent.main_agent import clear_memory, get_session_path, load_memory, save_memory
+from main_agent import clear_memory, get_session_path, load_memory, save_memory
 from tools.error_handler import atomic_load_json, atomic_save_json, validate_user_input
 from utils.api_monitor import CloudLLMClient
 import utils.api_monitor as api_monitor
@@ -116,7 +116,10 @@ def test_api_timeout():
         )
         result = client.chat_completion([{"role": "user", "content": "hello"}])
         content = result["choices"][0]["message"]["content"]
-        _assert("繁忙" in content, "API 超时模拟返回系统繁忙降级响应")
+        _assert(
+            "API 请求超时" in content and "1 秒" in content,
+            "API 超时模拟返回包含具体时限的降级响应",
+        )
     finally:
         api_monitor.requests.post = old_post
 

@@ -16,6 +16,11 @@ python web_ui.py
 """
 import os
 import sys
+import multiprocessing
+import queue
+import threading
+import time
+import uuid
 
 ROOT_PATH = os.path.abspath(os.path.dirname(__file__))
 if ROOT_PATH not in sys.path:
@@ -23,12 +28,14 @@ if ROOT_PATH not in sys.path:
 
 import gradio as gr
 
-from agent.main_agent import (
+from main_agent import (
     run_agent,
+    run_agent_worker,
     list_sessions,
     clear_memory,
     clear_all_memory,
     save_memory,
+    load_memory,
     get_recent_chat_records,
     normalize_session_name,
     _next_auto_session,
@@ -49,16 +56,6 @@ from tools.auth_login import (
 from utils.logger import get_logger, set_console_logging_enabled
 from embedding import rag_pipeline
 
-HELP_TEXT = """已有对话 或 历史对话：    查看已有会话列表
-新建对话 <名字>：         创建并切换到新会话（可省略空格）
-切换到 <对话名称>：       切换到已有会话（可省略空格）
-重新登录：                更换身份（买家/商家），切换后清空上下文
-清空当前记忆：            清空当前会话记忆
-清空所有对话记忆：        清空所有会话记忆
-帮助：                    显示命令帮助
-菜单：                    显示可执行指令
-退出：                    退出程序"""
-
 API_KEY_WARN = """⚠️ 未检测到 API 密钥！请在项目根目录 .env 文件中配置：
 
 AGENT_API_KEY=sk-...
@@ -72,9 +69,8 @@ CONSUMER_GUIDE = """### 👤 消费者使用说明
 
 - **商品查询**：查询商品信息，例如：`查询 SP001 的商品信息`
 - **订单查询**：仅查询当前账号自己的订单，例如：`查询 DD001`
-- **售后工单**：创建和查询自己的售后申请，例如：`为订单 DD001 创建退货售后`
+- **售后工单**：为订单创建售后工单，例如：`为订单 DD001 创建售后工单，问题类型为退换货`
 - **知识库查询**：解答售后政策、活动规则等问题，例如：`七天无理由退货有什么要求`
-- **会话管理**：输入 `帮助` 查看记忆和会话管理命令
 """
 
 MERCHANT_GUIDE = """### 🏪 商家使用说明
@@ -82,10 +78,9 @@ MERCHANT_GUIDE = """### 🏪 商家使用说明
 - **商品管理**：查询商品信息、修改价格/规格/上架状态等，例如：`把 SP001 的售价改为 99 元`
 - **库存查询**：查看商品库存数量，例如：`查询 SP001 的库存`
 - **订单查询**：根据订单号、商品或时间范围查询订单，例如：`查询 DD001`、`查询本月订单`
-- **售后工单**：创建和管理售后工单，例如：`查询待处理的售后工单`
+- **售后工单**：为订单创建售后工单，例如：`为订单 DD001 创建售后工单，问题类型为退换货`
 - **销售报表**：生成指定时间段的销售统计，例如：`导出本月销售报表`
 - **知识库查询**：解答售后政策、活动规则等问题，例如：`查询双十一活动规则`
-- **会话管理**：输入 `帮助` 查看记忆和会话管理命令
 - 运维面板：登录后展开「运维演示」，点击`刷新运维面板`查看主库状态
 """
 
@@ -94,6 +89,13 @@ MERCHANT_GUIDE = """### 🏪 商家使用说明
 set_console_logging_enabled(False)
 logger = get_logger(__name__)
 init_auth_files()
+
+CHAT_TIMEOUT_SECONDS = 60
+_CHAT_PROCESS_CONTEXT = multiprocessing.get_context("spawn")
+_CHAT_REQUEST_LOCK = threading.Lock()
+_ACTIVE_CHAT_REQUESTS = {}
+_FINISHED_CHAT_REQUESTS = set()
+_CHAT_REQUEST_KEYS = {}
 
 # ====================== 运维演示 ======================
 
@@ -357,43 +359,214 @@ def do_set_security_question(current_password, question, answer, state):
     return (_account_result(ok, message), *cleared)
 
 
-def chat_respond(message, history, state):
-    """发送消息并在当前进程调用 Agent，避免重复加载模型。
-    :param message: 用户输入或待处理的消息文本。
-    :param history: 当前会话的历史消息。
-    :param state: 界面保存的当前登录及会话状态。
-    :return: 返回函数处理得到的结果。
-    """
+def _terminate_chat_process(process):
+    """终止并回收 Agent 工作进程。"""
+    if process is None:
+        return
+    if process.is_alive():
+        process.terminate()
+    process.join(timeout=1)
+    if process.is_alive() and hasattr(process, "kill"):
+        process.kill()
+        process.join(timeout=1)
+
+
+def _claim_chat_terminal(request_id, status):
+    """以原子方式声明请求终态，防止完成、终止和超时重复落地。"""
+    with _CHAT_REQUEST_LOCK:
+        if request_id in _FINISHED_CHAT_REQUESTS:
+            return None
+        request = _ACTIVE_CHAT_REQUESTS.pop(request_id, None)
+        _FINISHED_CHAT_REQUESTS.add(request_id)
+        request_key = None
+        if request is not None:
+            request_key = request.get("request_key")
+        if request_key is None:
+            for key, value in list(_CHAT_REQUEST_KEYS.items()):
+                if value == request_id:
+                    request_key = key
+                    break
+        if request_key is not None and _CHAT_REQUEST_KEYS.get(request_key) == request_id:
+            _CHAT_REQUEST_KEYS.pop(request_key, None)
+        if request is not None:
+            request["status"] = status
+        return request if request is not None else {}
+
+
+def _append_notice_once(history, notice):
+    """仅在聊天记录末尾尚无同一提示时追加助手消息。"""
+    history = list(history or [])
+    if not history or history[-1].get("role") != "assistant" or history[-1].get("content") != notice:
+        history.append({"role": "assistant", "content": notice})
+    return history
+
+
+def _idle_chat_updates(state):
+    """生成请求结束后的统一控件状态。"""
+    return (
+        gr.update(visible=True),
+        gr.update(visible=False),
+        gr.update(interactive=True),
+        _status_text(state),
+        {},
+    )
+
+
+def start_chat_request(message, history, state):
+    """立即显示用户消息并切换到处理中状态。"""
+    history = list(history or [])
     if not state or not state.get("username"):
-        return history, "", "请先登录"
+        return (
+            history, gr.update(value=message or "", interactive=True),
+            gr.update(visible=True), gr.update(visible=False), "请先登录", {},
+        )
     message = (message or "").strip()
     if not message:
-        return history, "", _status_text(state)
-
-    # 快捷命令：帮助 / 菜单
-    if message == "帮助":
-        answer = f"📖 **命令帮助**\n\n{HELP_TEXT}"
-    elif message == "菜单":
-        answer = f"📋 **可执行指令**\n\n{HELP_TEXT}"
-    else:
-        try:
-            answer = run_agent(
-                message,
-                session_name=state["session"],
-                current_role=state["role"],
-                current_username=state["username"],
+        return (
+            history, gr.update(value="", interactive=True),
+            gr.update(visible=True), gr.update(visible=False), _status_text(state), {},
+        )
+    request_key = (state["role"], state["username"], state["session"])
+    with _CHAT_REQUEST_LOCK:
+        if request_key in _CHAT_REQUEST_KEYS:
+            return (
+                history, gr.update(value=message, interactive=False),
+                gr.update(visible=False), gr.update(visible=True),
+                "⏳ 当前请求仍在处理中，请勿重复提交", {},
             )
-            if answer is None or not str(answer).strip():
-                answer = "⚠️ 模型返回空内容，请稍后重试；本次请求未生成有效回答。"
-        except Exception as e:
-            answer = f"⚠️ 处理出错：{e}"
-            logger.exception(f"Web UI chat 异常: {e}")
+        request_id = uuid.uuid4().hex
+        _CHAT_REQUEST_KEYS[request_key] = request_id
+    request = {
+        "request_id": request_id, "message": message, "request_key": request_key,
+    }
+    return (
+        history + [{"role": "user", "content": message}],
+        gr.update(value="", interactive=False),
+        gr.update(visible=False),
+        gr.update(visible=True),
+        "⏳ 正在处理当前请求，可点击红色“终止”按钮",
+        request,
+    )
 
-    history = history + [
+
+def _wait_for_chat_worker(message, state, request_id):
+    """启动工作进程，并由后端强制执行 60 秒截止。"""
+    result_queue = None
+    process = None
+    with _CHAT_REQUEST_LOCK:
+        if request_id in _FINISHED_CHAT_REQUESTS:
+            return "cancelled", None
+        result_queue = _CHAT_PROCESS_CONTEXT.Queue()
+        process = _CHAT_PROCESS_CONTEXT.Process(
+            target=run_agent_worker,
+            args=(
+                result_queue, message, state["session"], state["role"],
+                state["username"],
+            ),
+            daemon=True,
+        )
+        process.start()
+        _ACTIVE_CHAT_REQUESTS[request_id] = {
+            "process": process, "queue": result_queue, "status": "running",
+            "request_key": (state["role"], state["username"], state["session"]),
+        }
+
+    deadline = time.monotonic() + CHAT_TIMEOUT_SECONDS
+    try:
+        while True:
+            with _CHAT_REQUEST_LOCK:
+                if request_id in _FINISHED_CHAT_REQUESTS:
+                    return "cancelled", None
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                request = _claim_chat_terminal(request_id, "timeout")
+                if request is not None:
+                    _terminate_chat_process(process)
+                    return "timeout", None
+                return "cancelled", None
+            try:
+                return result_queue.get(timeout=min(0.05, remaining))
+            except queue.Empty:
+                if not process.is_alive():
+                    return "error", "Agent 工作进程异常退出"
+    finally:
+        _terminate_chat_process(process)
+        if result_queue is not None:
+            result_queue.close()
+            result_queue.join_thread()
+
+
+def _persist_completed_exchange(state, message, answer):
+    """仅在父进程接受正常结果后提交本轮会话记忆。"""
+    messages = load_memory(
+        state["session"], username=state["username"], role=state["role"]
+    )
+    messages.extend([
         {"role": "user", "content": message},
-        {"role": "assistant", "content": str(answer)},
-    ]
-    return history, "", _status_text(state)
+        {"role": "assistant", "content": answer},
+    ])
+    save_memory(
+        messages, state["session"], username=state["username"], role=state["role"]
+    )
+
+
+def run_chat_request(history, state, request):
+    """等待 Agent 结果，并统一处理完成、错误、手动终止和超时。"""
+    request = request or {}
+    request_id = request.get("request_id")
+    message = request.get("message", "")
+    if not request_id:
+        send_update, stop_update, input_update, status, cleared = _idle_chat_updates(state)
+        return history, send_update, stop_update, input_update, status, cleared
+    try:
+        result_type, payload = _wait_for_chat_worker(message, state, request_id)
+        if result_type == "timeout":
+            history = _append_notice_once(history, "请求已超时，已自动终止")
+            status = "⏱️ 请求已超时，工作进程已终止并回收"
+        elif result_type == "cancelled":
+            history = _append_notice_once(history, "已终止")
+            status = "⛔ 当前请求已终止"
+        elif result_type == "ok":
+            claimed = _claim_chat_terminal(request_id, "completed")
+            if claimed is None:
+                history = _append_notice_once(history, "已终止")
+                status = "⛔ 当前请求已终止"
+            else:
+                answer = str(payload or "").strip()
+                if not answer:
+                    answer = "⚠️ 模型返回空内容，请稍后重试；本次请求未生成有效回答。"
+                _persist_completed_exchange(state, message, answer)
+                history = list(history or []) + [{"role": "assistant", "content": answer}]
+                status = _status_text(state)
+        else:
+            _claim_chat_terminal(request_id, "error")
+            error_text = f"⚠️ 处理出错：{payload}"
+            history = list(history or []) + [{"role": "assistant", "content": error_text}]
+            status = "⚠️ 请求处理失败"
+    except Exception as exc:
+        _claim_chat_terminal(request_id, "error")
+        history = list(history or []) + [
+            {"role": "assistant", "content": f"⚠️ 处理出错：{exc}"}
+        ]
+        status = "⚠️ 请求处理失败"
+        logger.exception(f"Web UI chat 异常: {exc}")
+    return (
+        history, gr.update(visible=True), gr.update(visible=False),
+        gr.update(interactive=True), status, {},
+    )
+
+
+def stop_chat_request(history, request):
+    """手动终止当前请求并只追加一次终止提示。"""
+    request_id = (request or {}).get("request_id")
+    claimed = _claim_chat_terminal(request_id, "stopped") if request_id else None
+    if claimed is not None:
+        _terminate_chat_process(claimed.get("process"))
+        history = _append_notice_once(history, "已终止")
+    return (
+        history, gr.update(visible=True), gr.update(visible=False),
+        gr.update(interactive=True), "⛔ 当前请求已终止", {},
+    )
 def new_session(new_name, state):
     """新建会话（名称留空则自动编号）。
     :param new_name: 准备创建的新会话名称。
@@ -488,6 +661,7 @@ custom_css = """
     font-size: 14px; color: #444; padding: 10px 14px;
     background: #f0f4f8; border-radius: 8px; border-left: 3px solid #3b82f6;
 }
+.chat-action {min-width: 96px !important;}
 """
 
 with gr.Blocks(title="电商客服 Agent") as demo:
@@ -527,16 +701,20 @@ with gr.Blocks(title="电商客服 Agent") as demo:
         with gr.Column(scale=3):
             status_bar = gr.Markdown("未登录", elem_classes=["status-bar"])
             api_key_warn = gr.Markdown("")
-            gr.Markdown(
-                "💡 **提示**：输入「帮助」查看全部会话管理命令，输入「菜单」查看可执行指令"
-            )
             chatbot = gr.Chatbot(label="对话", height=480)
             with gr.Row():
                 msg_box = gr.Textbox(
                     placeholder="输入客服问题，回车发送",
                     scale=5, show_label=False, autofocus=True,
                 )
-                send_btn = gr.Button("发送", variant="primary", scale=1)
+                send_btn = gr.Button(
+                    "发送", variant="primary", scale=1, elem_classes=["chat-action"]
+                )
+                stop_btn = gr.Button(
+                    "终止", variant="stop", scale=1, visible=False,
+                    elem_classes=["chat-action"],
+                )
+            request_state = gr.State({})
         # 右侧会话管理
         with gr.Column(scale=1, min_width=260):
             with gr.Accordion("📖 使用说明", open=True):
@@ -597,8 +775,42 @@ with gr.Blocks(title="电商客服 Agent") as demo:
         [recover_status, recover_answer, recover_new_password, recover_confirm_password],
     )
 
-    send_btn.click(chat_respond, [msg_box, chatbot, state], [chatbot, msg_box, status_bar])
-    msg_box.submit(chat_respond, [msg_box, chatbot, state], [chatbot, msg_box, status_bar])
+    chat_start_outputs = [
+        chatbot, msg_box, send_btn, stop_btn, status_bar, request_state,
+    ]
+    chat_finish_outputs = [
+        chatbot, send_btn, stop_btn, msg_box, status_bar, request_state,
+    ]
+    send_start_event = send_btn.click(
+        start_chat_request,
+        [msg_box, chatbot, state],
+        chat_start_outputs,
+        queue=False,
+    )
+    send_chat_event = send_start_event.then(
+        run_chat_request,
+        [chatbot, state, request_state],
+        chat_finish_outputs,
+    )
+    submit_start_event = msg_box.submit(
+        start_chat_request,
+        [msg_box, chatbot, state],
+        chat_start_outputs,
+        queue=False,
+    )
+    submit_chat_event = submit_start_event.then(
+        run_chat_request,
+        [chatbot, state, request_state],
+        chat_finish_outputs,
+    )
+    chat_events = [send_chat_event, submit_chat_event]
+    stop_btn.click(
+        stop_chat_request,
+        [chatbot, request_state],
+        chat_finish_outputs,
+        cancels=chat_events,
+        queue=False,
+    )
 
     new_btn.click(new_session, [new_name_box, state], [session_dropdown, chatbot, status_bar, state])
     switch_btn.click(switch_session, [session_dropdown, state], [chatbot, status_bar, state, session_dropdown])

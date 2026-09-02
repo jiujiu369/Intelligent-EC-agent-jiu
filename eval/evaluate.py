@@ -12,7 +12,7 @@ if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
 import config
-from agent.main_agent import run_agent
+from main_agent import run_agent
 from tools.hallucination_checker import check as hallucination_check
 from utils.api_monitor import CloudLLMClient
 

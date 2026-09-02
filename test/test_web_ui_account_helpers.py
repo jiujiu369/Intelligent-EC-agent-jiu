@@ -2,7 +2,9 @@
 
 import importlib
 import os
+import queue
 import sys
+import time
 import types
 import unittest
 import uuid
@@ -32,24 +34,28 @@ class _FakeComponent:
         return False
 
     def click(self, *args, **kwargs):
-        self.events.append({
+        event = {
             "kind": "click",
             "fn": args[0] if args else kwargs.get("fn"),
             "inputs": args[1] if len(args) > 1 else kwargs.get("inputs", []),
             "outputs": args[2] if len(args) > 2 else kwargs.get("outputs", []),
             "cancels": kwargs.get("cancels"),
-        })
-        return self
+            "chain": [],
+        }
+        self.events.append(event)
+        return _FakeEvent(event)
 
     def submit(self, *args, **kwargs):
-        self.events.append({
+        event = {
             "kind": "submit",
             "fn": args[0] if args else kwargs.get("fn"),
             "inputs": args[1] if len(args) > 1 else kwargs.get("inputs", []),
             "outputs": args[2] if len(args) > 2 else kwargs.get("outputs", []),
             "cancels": kwargs.get("cancels"),
-        })
-        return self
+            "chain": [],
+        }
+        self.events.append(event)
+        return _FakeEvent(event)
 
     def then(self, *args, **kwargs):
         self.events.append({
@@ -69,6 +75,24 @@ class _FakeComponent:
             "outputs": args[2] if len(args) > 2 else kwargs.get("outputs", []),
             "cancels": kwargs.get("cancels"),
         })
+        return self
+
+
+class _FakeEvent:
+    """记录 Gradio 事件链，便于验证两个提交入口使用相同流程。"""
+
+    def __init__(self, root_event):
+        self.root_event = root_event
+
+    def then(self, *args, **kwargs):
+        event = {
+            "kind": "then",
+            "fn": args[0] if args else kwargs.get("fn"),
+            "inputs": args[1] if len(args) > 1 else kwargs.get("inputs", []),
+            "outputs": args[2] if len(args) > 2 else kwargs.get("outputs", []),
+            "cancels": kwargs.get("cancels"),
+        }
+        self.root_event["chain"].append(event)
         return self
 
 
@@ -95,12 +119,19 @@ def _install_import_fakes():
         Dropdown=_FakeComponent,
         Timer=_FakeComponent,
     )
-    fake_agent = types.ModuleType("agent.main_agent")
+    fake_agent = types.ModuleType("main_agent")
     fake_agent.run_agent = lambda *args, **kwargs: ""
+    def fake_run_agent_worker(result_queue, message, session, role, username):
+        result_queue.put(("ok", fake_agent.run_agent(
+            message, session_name=session, current_role=role,
+            current_username=username, persist_result=False,
+        )))
+    fake_agent.run_agent_worker = fake_run_agent_worker
     fake_agent.list_sessions = lambda *args, **kwargs: ["默认会话"]
     fake_agent.clear_memory = lambda *args, **kwargs: None
     fake_agent.clear_all_memory = lambda *args, **kwargs: None
     fake_agent.save_memory = lambda *args, **kwargs: None
+    fake_agent.load_memory = lambda *args, **kwargs: []
     fake_agent.get_recent_chat_records = lambda *args, **kwargs: []
     fake_agent.normalize_session_name = lambda value: value
     fake_agent._next_auto_session = lambda *args, **kwargs: "默认会话"
@@ -110,7 +141,7 @@ def _install_import_fakes():
 
     return {
         "gradio": fake_gradio,
-        "agent.main_agent": fake_agent,
+        "main_agent": fake_agent,
         "embedding": fake_embedding,
     }
 
@@ -182,6 +213,11 @@ class WebUiAccountHelperTests(unittest.TestCase):
         self.assertIn("查询 DD001", consumer_guide)
         self.assertIn("把 SP001 的售价改为 99 元", merchant_guide)
         self.assertIn("刷新运维面板", merchant_guide)
+        self.assertNotIn("查询待处理的售后工单", merchant_guide)
+        self.assertNotIn("管理售后工单", merchant_guide)
+        self.assertNotIn("查询自己的售后申请", consumer_guide)
+        self.assertIn("创建售后工单", consumer_guide)
+        self.assertIn("创建售后工单", merchant_guide)
 
     def test_role_mapping_fails_closed_for_every_account_callback(self):
         """未知界面角色不得落入商家分支或调用任何认证操作。"""
@@ -365,20 +401,237 @@ class WebUiAccountHelperTests(unittest.TestCase):
         ]
         self.assertGreaterEqual(len(cleared_values), 8)
 
-    def test_chat_uses_in_process_agent_and_never_renders_blank_answer(self):
-        """聊天必须复用当前进程，并将空模型输出转换为明确提示。"""
+    def test_chat_start_immediately_appends_user_and_switches_controls(self):
+        """提交阶段若未立即显示用户消息或未切换终止按钮，本用例会失败。"""
         state = {
             "session": "默认会话",
             "role": auth_login.ROLE_CONSUMER,
             "username": "alice",
         }
-        with patch.object(self.ui, "run_agent", return_value="   ") as run_mock:
-            history, cleared, _status = self.ui.chat_respond("查询水杯", [], state)
+        result = self.ui.start_chat_request("查询水杯", [], state)
 
-        run_mock.assert_called_once()
-        self.assertEqual(cleared, "")
-        self.assertIn("模型返回空内容", history[-1]["content"])
-        self.assertFalse(hasattr(self.ui, "_CHAT_PROCESS_CONTEXT"))
+        self.assertEqual(result[0], [{"role": "user", "content": "查询水杯"}])
+        self.assertEqual(result[1]["value"], "")
+        self.assertEqual(result[1]["interactive"], False)
+        self.assertEqual(result[2]["visible"], False)
+        self.assertEqual(result[3]["visible"], True)
+        self.assertTrue(result[4].startswith("⏳"))
+        self.assertEqual(result[5]["message"], "查询水杯")
+        self.assertTrue(result[5]["request_id"])
+
+    def test_chat_start_preserves_empty_and_unauthenticated_behavior(self):
+        """空消息或未登录提交不得进入工作进程。"""
+        empty = self.ui.start_chat_request(
+            "   ", [], {
+                "username": "alice", "role": auth_login.ROLE_CONSUMER,
+                "session": "默认会话",
+            }
+        )
+        unauthenticated = self.ui.start_chat_request("查询水杯", [], {})
+
+        self.assertFalse(empty[5].get("request_id"))
+        self.assertFalse(unauthenticated[5].get("request_id"))
+        self.assertEqual(empty[0], [])
+        self.assertEqual(unauthenticated[0], [])
+        self.assertIn("请先登录", unauthenticated[4])
+
+    def test_duplicate_submit_is_rejected_while_request_is_pending(self):
+        """同一会话处理中若能再次提交，本用例会失败。"""
+        state = {
+            "session": "默认会话",
+            "role": auth_login.ROLE_CONSUMER,
+            "username": "alice",
+        }
+        first = self.ui.start_chat_request("第一次", [], state)
+        second = self.ui.start_chat_request("第二次", first[0], state)
+        self.addCleanup(
+            self.ui.stop_chat_request, first[0], first[5]
+        )
+
+        self.assertEqual(second[0], first[0])
+        self.assertFalse(second[5].get("request_id"))
+        self.assertIn("请勿重复提交", second[4])
+
+    def test_send_and_enter_share_the_same_start_work_finish_flow(self):
+        """点击与回车任一入口绕过统一流程时，本用例会失败。"""
+        click_event = self.ui.send_btn.events[0]
+        submit_event = self.ui.msg_box.events[0]
+
+        self.assertEqual(click_event["fn"], self.ui.start_chat_request)
+        self.assertEqual(submit_event["fn"], self.ui.start_chat_request)
+        self.assertEqual(click_event["outputs"], submit_event["outputs"])
+        click_functions = [event["fn"] for event in click_event["chain"]]
+        submit_functions = [event["fn"] for event in submit_event["chain"]]
+        self.assertEqual(click_functions, [self.ui.run_chat_request])
+        self.assertEqual(submit_functions, [self.ui.run_chat_request])
+
+    def test_manual_stop_terminates_worker_and_appends_notice_once(self):
+        """手动终止未回收进程或重复追加提示时，本用例会失败。"""
+        class RunningProcess:
+            def __init__(self):
+                self.terminated = False
+                self.joined = False
+
+            def is_alive(self):
+                return not self.terminated
+
+            def terminate(self):
+                self.terminated = True
+
+            def join(self, timeout=None):
+                self.joined = True
+
+        process = RunningProcess()
+        request_id = "manual-stop"
+        self.ui._ACTIVE_CHAT_REQUESTS[request_id] = {
+            "process": process,
+            "status": "running",
+        }
+
+        first = self.ui.stop_chat_request(
+            [{"role": "user", "content": "查询水杯"}], {"request_id": request_id}
+        )
+        second = self.ui.stop_chat_request(first[0], {"request_id": request_id})
+
+        self.assertTrue(process.terminated)
+        self.assertTrue(process.joined)
+        self.assertEqual(
+            [item["content"] for item in second[0]].count("已终止"), 1
+        )
+        self.assertNotIn(request_id, self.ui._ACTIVE_CHAT_REQUESTS)
+
+    def test_terminate_helper_kills_a_real_spawned_process(self):
+        """Windows spawn 工作进程必须在终止后实际退出。"""
+        process = self.ui._CHAT_PROCESS_CONTEXT.Process(target=time.sleep, args=(30,))
+        process.start()
+        self.addCleanup(self.ui._terminate_chat_process, process)
+
+        self.ui._terminate_chat_process(process)
+
+        self.assertFalse(process.is_alive())
+
+    def test_worker_defers_memory_persistence_until_parent_accepts_result(self):
+        """子进程若自行持久化，终止竞态会污染会话记忆。"""
+        class ResultQueue:
+            def __init__(self):
+                self.items = []
+
+            def put(self, item):
+                self.items.append(item)
+
+        result_queue = ResultQueue()
+        agent_module = sys.modules["main_agent"]
+        with patch.object(agent_module, "run_agent", return_value="回答") as run_mock:
+            self.ui.run_agent_worker(
+                result_queue, "查询水杯", "默认会话",
+                auth_login.ROLE_CONSUMER, "alice",
+            )
+
+        self.assertEqual(result_queue.items, [("ok", "回答")])
+        self.assertFalse(run_mock.call_args.kwargs["persist_result"])
+
+    def test_backend_timeout_terminates_worker_and_ignores_late_result(self):
+        """后端截止未杀进程或取消后仍采纳迟到结果时，本用例会失败。"""
+        class LateQueue:
+            def get(self, timeout=None):
+                raise queue.Empty
+
+            def close(self):
+                pass
+
+            def join_thread(self):
+                pass
+
+        class RunningProcess:
+            def __init__(self):
+                self.terminated = False
+
+            def start(self):
+                pass
+
+            def is_alive(self):
+                return not self.terminated
+
+            def terminate(self):
+                self.terminated = True
+
+            def join(self, timeout=None):
+                pass
+
+        process = RunningProcess()
+        context = types.SimpleNamespace(
+            Queue=lambda: LateQueue(), Process=lambda **kwargs: process
+        )
+        state = {
+            "session": "默认会话",
+            "role": auth_login.ROLE_CONSUMER,
+            "username": "alice",
+        }
+        request = {"request_id": "timeout", "message": "查询水杯"}
+        history = [{"role": "user", "content": "查询水杯"}]
+
+        with patch.object(self.ui, "_CHAT_PROCESS_CONTEXT", context), patch.object(
+            self.ui, "CHAT_TIMEOUT_SECONDS", 0
+        ), patch.object(self.ui, "save_memory") as save_mock:
+            result = self.ui.run_chat_request(history, state, request)
+
+        self.assertTrue(process.terminated)
+        self.assertEqual(result[0][-1]["content"], "请求已超时，已自动终止")
+        self.assertEqual(
+            [item["content"] for item in result[0]].count("请求已超时，已自动终止"),
+            1,
+        )
+        save_mock.assert_not_called()
+
+    def test_normal_completion_restores_controls_and_persists_once(self):
+        """正常结果未恢复按钮或未在父进程确认后保存记忆时，本用例会失败。"""
+        state = {
+            "session": "默认会话",
+            "role": auth_login.ROLE_CONSUMER,
+            "username": "alice",
+        }
+        request = {"request_id": "done", "message": "查询水杯"}
+        history = [{"role": "user", "content": "查询水杯"}]
+
+        with patch.object(
+            self.ui, "_wait_for_chat_worker", return_value=("ok", "回答")
+        ), patch.object(self.ui, "_persist_completed_exchange") as persist_mock:
+            result = self.ui.run_chat_request(history, state, request)
+
+        self.assertEqual(result[0][-1]["content"], "回答")
+        self.assertEqual(result[1]["visible"], True)
+        self.assertEqual(result[2]["visible"], False)
+        self.assertEqual(result[3]["interactive"], True)
+        persist_mock.assert_called_once_with(state, "查询水杯", "回答")
+
+    def test_worker_error_restores_controls_without_persisting(self):
+        """普通异常不得破坏按钮恢复或写入会话记忆。"""
+        state = {
+            "session": "默认会话",
+            "role": auth_login.ROLE_CONSUMER,
+            "username": "alice",
+        }
+        request = {"request_id": "error", "message": "查询水杯"}
+        history = [{"role": "user", "content": "查询水杯"}]
+
+        with patch.object(
+            self.ui, "_wait_for_chat_worker", return_value=("error", "网络异常")
+        ), patch.object(self.ui, "_persist_completed_exchange") as persist_mock:
+            result = self.ui.run_chat_request(history, state, request)
+
+        self.assertIn("处理出错", result[0][-1]["content"])
+        self.assertEqual(result[1]["visible"], True)
+        self.assertEqual(result[2]["visible"], False)
+        self.assertEqual(result[3]["interactive"], True)
+        persist_mock.assert_not_called()
+
+    def test_web_ui_help_and_menu_shortcuts_are_removed_but_guides_remain(self):
+        """Web UI 仍暴露快捷命令或误删右侧说明时，本用例会失败。"""
+        self.assertFalse(hasattr(self.ui, "HELP_TEXT"))
+        self.assertNotIn("输入 `帮助`", self.ui.CONSUMER_GUIDE)
+        self.assertNotIn("输入 `帮助`", self.ui.MERCHANT_GUIDE)
+        self.assertIn("消费者使用说明", self.ui.CONSUMER_GUIDE)
+        self.assertIn("商家使用说明", self.ui.MERCHANT_GUIDE)
 
 
 if __name__ == "__main__":

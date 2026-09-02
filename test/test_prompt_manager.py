@@ -52,15 +52,23 @@ failures += _assert("不得自行编造商品名" in consumer_prompt, "反幻觉
 failures += _assert("API 失败" in consumer_prompt and "RAG 无结果" in consumer_prompt and "工具异常" in consumer_prompt, "异常兜底话术被拼接")
 
 merchant_prompt = build_system_prompt(ROLE_MERCHANT, session_context="历史摘要：用户关注 SP001")
-failures += _assert("拥有全部管理权限" in merchant_prompt, "商家角色描述被拼接")
+failures += _assert("店铺管理员" in merchant_prompt, "商家角色描述被拼接")
 failures += _assert(merchant_prompt.rstrip().endswith("历史摘要：用户关注 SP001"), "session_context 追加到末尾")
+failures += _assert("创建售后工单" in consumer_prompt, "买家提示仅声明真实售后创建能力")
+failures += _assert("创建售后工单" in merchant_prompt, "商家提示仅声明真实售后创建能力")
+failures += _assert("管理售后工单" not in merchant_prompt, "商家提示不声明售后管理能力")
+failures += _assert("查询售后工单" not in merchant_prompt, "商家提示不声明售后查询能力")
+failures += _assert(
+    "查询商品、订单、售后工单" not in merchant_prompt,
+    "基础提示不把售后工单列入查询能力",
+)
 
 failures += _assert("买家" in get_role_description(ROLE_CONSUMER), "可单独获取买家角色描述")
 failures += _assert("店铺管理员" in get_role_description(ROLE_MERCHANT), "可单独获取商家角色描述")
 failures += _assert(get_error_message("api_failure") == "API 失败：系统繁忙，请稍后再试", "可按类型获取 API 兜底话术")
 failures += _assert(get_error_message("unknown") == "系统走丢了，请重试", "未知异常类型返回通用兜底")
 
-main_agent_path = os.path.join(os.getcwd(), "agent", "main_agent.py")
+main_agent_path = os.path.join(ROOT_PATH, "main_agent.py")
 with open(main_agent_path, "r", encoding="utf-8") as f:
     source = f.read()
 failures += _assert("SYSTEM_PROMPT =" not in source, "main_agent.py 删除硬编码 SYSTEM_PROMPT")
@@ -71,7 +79,7 @@ fake_rag = types.ModuleType("embedding.rag_pipeline")
 fake_rag.rag_search = lambda *args, **kwargs: []
 sys.modules["embedding.rag_pipeline"] = fake_rag
 
-import agent.main_agent as main_agent
+import main_agent
 
 
 class FakeLLM:
@@ -105,5 +113,5 @@ finally:
         os.remove(session_path)
 
 print("=" * 60)
-print(f"  通过: {17 - failures}  失败: {failures}  总计: 17")
+print(f"  通过: {22 - failures}  失败: {failures}  总计: 22")
 raise SystemExit(1 if failures else 0)
